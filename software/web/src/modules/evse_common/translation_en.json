@@ -115,7 +115,8 @@
             "slot_9": "Modbus TCP",
             "slot_10": "Modbus TCP clearance",
             "slot_11": "OCPP",
-            "slot_12": "Lalala"
+            "slot_12": "Lalala",
+            "slot_13": "Time restriction"
         },
         "script": {
             "error_code": "Error code",
@@ -156,7 +157,8 @@
             "slot_9": "Modbus TCP",
             "slot_10": "Modbus TCP clearance",
             "slot_11": "OCPP",
-            "slot_12": "Lalala"
+            "slot_12": "Lalala",
+            "slot_13": "Time restriction"
         }
     }
 }
