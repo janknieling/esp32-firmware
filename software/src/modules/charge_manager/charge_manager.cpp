@@ -18,6 +18,7 @@
  */
 
 #include "charge_manager.h"
+#include "keba_modbus_charger.h"
 
 #include <algorithm>
 #include <esp_http_client.h>
@@ -46,6 +47,10 @@
 #include "modules/users/users.h" // For USERS_AUTH_TYPE_* constants
 
 static constexpr micros_t WATCHDOG_TIMEOUT = 30_s;
+
+// Per-charger control protocol, stored in charge_manager/config chargers[].proto.
+#define CHARGER_PROTO_WARP            0
+#define CHARGER_PROTO_KEBA_MODBUS_TCP 1
 
 // Forward declarations of static functions for charger names file
 static int find_charger_entry(File &f, uint32_t uid);
@@ -95,6 +100,13 @@ void ChargeManager::pre_setup()
         {"name", Config::Str("", 0, CHARGER_NAME_LENGTH)},
         {"rot", Config::Enum(CMPhaseRotation::Unknown)},
         {"uid", Config::Uint32(0)},
+        // Protocol used to control this charger: 0 = WARP management protocol (default),
+        // 1 = third-party KEBA KeContact P30 via Modbus/TCP.
+        {"proto", Config::Uint8(CHARGER_PROTO_WARP)},
+        // Modbus/TCP port, only used when proto == KEBA Modbus/TCP.
+        {"port", Config::Uint16(502)},
+        // Enable phase switching via Modbus, only used when proto == KEBA Modbus/TCP.
+        {"phase_switch", Config::Bool(false)},
     });
 
     config = ConfigRoot{Config::Object({
@@ -587,6 +599,14 @@ static void update_charge_mode(uint8_t client_id, cm_state_v1 *v1, cm_state_v4 *
 bool ChargeManager::send_client_packet(uint8_t i) {
     auto &charger_alloc = this->charger_allocation_state[i];
 
+#if MODULE_MODBUS_TCP_CLIENT_AVAILABLE()
+    // KEBA Modbus/TCP chargers are controlled by their own backend, not via cm_networking.
+    if (this->keba_chargers != nullptr && this->keba_chargers[i] != nullptr) {
+        this->keba_chargers[i]->apply_allocation(charger_alloc.allocated_current, charger_alloc.allocated_phases);
+        return true;
+    }
+#endif
+
     auto ignore_allocation = false;
     auto current = charger_alloc.allocated_current;
     auto cp_disconnect = charger_alloc.cp_disconnect;
@@ -895,6 +915,16 @@ void ChargeManager::setup()
 
     for (size_t i = 0; i < charger_count; ++i) {
         hosts[i] = hosts_buf + hosts_written;
+
+        // KEBA Modbus/TCP chargers are not driven by the WARP management protocol.
+        // Leave their host empty so cm_networking skips them; the KebaModbusCharger
+        // backend talks to the configured host directly via Modbus/TCP.
+        if (config.get("chargers")->get(i)->get("proto")->asUint() != CHARGER_PROTO_WARP) {
+            hosts_buf[hosts_written] = '\0';
+            ++hosts_written;
+            continue;
+        }
+
         memcpy(hosts_buf + hosts_written, config.get("chargers")->get(i)->get("host")->asEphemeralCStr(), config.get("chargers")->get(i)->get("host")->asString().length());
         hosts_written += config.get("chargers")->get(i)->get("host")->asString().length();
         hosts_buf[hosts_written] = '\0';
@@ -911,6 +941,31 @@ void ChargeManager::setup()
         charger_state[i].last_phase_switch = -ca_config->global_hysteresis;
         charger_state[i].authenticated_user_id = NOT_AUTHORIZED;
     }
+
+#if MODULE_MODBUS_TCP_CLIENT_AVAILABLE()
+    // Create a Modbus/TCP backend for every charger configured as a KEBA wallbox.
+    // These backends fill charger_state[i] from the wallbox and write the
+    // allocation decision back, so the KEBA participates in load management
+    // alongside the WARP chargers.
+    for (size_t i = 0; i < charger_count; ++i) {
+        if (config.get("chargers")->get(i)->get("proto")->asUint() != CHARGER_PROTO_KEBA_MODBUS_TCP)
+            continue;
+
+        if (this->keba_chargers == nullptr)
+            this->keba_chargers = (KebaModbusCharger **)calloc_psram_or_dram(charger_count, sizeof(KebaModbusCharger *));
+
+        this->keba_chargers[i] = new KebaModbusCharger(
+            static_cast<uint8_t>(i),
+            &charger_state[i],
+            &charger_allocation_state[i],
+            config.get("chargers")->get(i)->get("host")->asString(),
+            config.get("chargers")->get(i)->get("port")->asUint16(),
+            config.get("chargers")->get(i)->get("phase_switch")->asBool(),
+            modbus_tcp_client.get_pool());
+
+        this->keba_chargers[i]->begin();
+    }
+#endif
 
     // TODO: Change all currents everywhere to int32_t or int16_t.
     int def_cur = (int) default_current;

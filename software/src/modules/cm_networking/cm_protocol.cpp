@@ -238,7 +238,14 @@ void CMNetworking::register_manager(const char *const *const hosts,
         device->addr.sin_port   = htons(CHARGE_MANAGEMENT_PORT);
 
         ip4_addr_t ip4_addr;
-        if (ip4addr_aton(hostname, &ip4_addr)) {
+        if (hostname == nullptr || hostname[0] == '\0') {
+            // Empty hostname: this charger is controlled by another backend (e.g. a
+            // KEBA wallbox via Modbus/TCP), not by the WARP management protocol.
+            // Mark it so the resolver skips it and no command packets are ever sent.
+            device->addr.sin_addr.s_addr = 0;
+            device->host_address_type = HostAddressType::IP;
+            device->resolve_state     = ResolveState::NotResolved;
+        } else if (ip4addr_aton(hostname, &ip4_addr)) {
             // Hostname is actually an IPv4 address that never needs resolving.
             device->addr.sin_addr.s_addr = ip4_addr.addr;
 

@@ -29,6 +29,7 @@ import { ConfigForm } from "../../ts/components/config_form";
 import { FormRow } from "../../ts/components/form_row";
 import { InputText } from "../../ts/components/input_text";
 import { InputHost } from "../../ts/components/input_host";
+import { InputNumber } from "../../ts/components/input_number";
 import { Button, Collapse, ListGroup, ListGroupItem } from "react-bootstrap";
 import { InputSelect } from "../../ts/components/input_select";
 import { Plus } from "react-feather";
@@ -73,8 +74,8 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
         super('charge_manager/config',
               () => __("charge_manager.script.save_failed"),
               () => __("charge_manager.script.reboot_content_changed"), {
-                  addCharger: {host: "", name: "", rot: -1, uid: 0},
-                  editCharger: {host: "", name: "", rot: -1, uid: 0},
+                  addCharger: {host: "", name: "", rot: -1, uid: 0, proto: 0, port: 502, phase_switch: false},
+                  editCharger: {host: "", name: "", rot: -1, uid: 0, proto: 0, port: 502, phase_switch: false},
                   managementEnabled: false,
                   scanResult: [],
                   chargersInvalid: false,
@@ -249,7 +250,10 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
             host: "127.0.0.1",
             name: name.display_name,
             rot: CMPhaseRotation.Unknown,
-            uid: 0
+            uid: 0,
+            proto: 0,
+            port: 502,
+            phase_switch: false
         });
         this.setState({chargers: c})
     }
@@ -405,6 +409,29 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                             class={check_host(state.editCharger.host, i) != undefined ? "is-invalid" : ""}
                                             invalidFeedback={check_host(state.editCharger.host, i)}/>
                                     </FormRow>
+                                    <FormRow label={__("charge_manager.content.charger_proto")} help={__("charge_manager.content.charger_proto_help")}>
+                                        <InputSelect items={[
+                                                ["0", __("charge_manager.content.proto_warp")],
+                                                ["1", __("charge_manager.content.proto_keba_modbus")],
+                                            ]}
+                                            value={state.editCharger.proto.toString()}
+                                            onValue={(v) => this.setState({editCharger: {...state.editCharger, proto: parseInt(v)}})}
+                                            />
+                                    </FormRow>
+                                    <Collapse in={state.editCharger.proto == 1}>
+                                        <div>
+                                            <FormRow label={__("charge_manager.content.charger_port")}>
+                                                <InputNumber value={state.editCharger.port}
+                                                    onValue={(v) => this.setState({editCharger: {...state.editCharger, port: v}})}
+                                                    min={1} max={65535} />
+                                            </FormRow>
+                                            <FormRow label={__("charge_manager.content.charger_phase_switch")}>
+                                                <Switch desc={__("charge_manager.content.charger_phase_switch_desc")}
+                                                    checked={state.editCharger.phase_switch}
+                                                    onClick={() => this.setState({editCharger: {...state.editCharger, phase_switch: !state.editCharger.phase_switch}})}/>
+                                            </FormRow>
+                                        </div>
+                                    </Collapse>
                                     <FormRow label={__("charge_manager.content.edit_charger_rotation")} help={__("charge_manager.content.charger_rotation_help")}>
                                         <InputSelect items={[
                                                 [CMPhaseRotation.Unknown.toString(), __("charge_manager.content.rotation_0")],
@@ -441,7 +468,7 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                         addTitle={__("charge_manager.content.add_charger_title")}
                         addMessage={__("charge_manager.content.add_charger_message")(state.chargers.length, MAX_CONTROLLED_CHARGERS)}
                         onAddShow={async () => {
-                            this.setState({addCharger: {name: "", host: "", rot: -1, uid: 0}});
+                            this.setState({addCharger: {name: "", host: "", rot: -1, uid: 0, proto: 0, port: 502, phase_switch: false}});
                             this.scan_services();
                             this.scan_interval_id = window.setInterval(this.scan_services, 3000);
                         }}
@@ -462,6 +489,29 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                     class={check_host(state.addCharger.host, -1) != undefined ? "is-invalid" : ""}
                                     invalidFeedback={check_host(state.addCharger.host, -1)}/>
                             </FormRow>
+                            <FormRow label={__("charge_manager.content.charger_proto")} help={__("charge_manager.content.charger_proto_help")}>
+                                <InputSelect items={[
+                                        ["0", __("charge_manager.content.proto_warp")],
+                                        ["1", __("charge_manager.content.proto_keba_modbus")],
+                                    ]}
+                                    value={state.addCharger.proto.toString()}
+                                    onValue={(v) => this.setState({addCharger: {...state.addCharger, proto: parseInt(v)}})}
+                                    />
+                            </FormRow>
+                            <Collapse in={state.addCharger.proto == 1}>
+                                <div>
+                                    <FormRow label={__("charge_manager.content.charger_port")}>
+                                        <InputNumber value={state.addCharger.port}
+                                            onValue={(v) => this.setState({addCharger: {...state.addCharger, port: v}})}
+                                            min={1} max={65535} />
+                                    </FormRow>
+                                    <FormRow label={__("charge_manager.content.charger_phase_switch")}>
+                                        <Switch desc={__("charge_manager.content.charger_phase_switch_desc")}
+                                            checked={state.addCharger.phase_switch}
+                                            onClick={() => this.setState({addCharger: {...state.addCharger, phase_switch: !state.addCharger.phase_switch}})}/>
+                                    </FormRow>
+                                </div>
+                            </Collapse>
                             <FormRow label={__("charge_manager.content.add_charger_found")}>
                                 <DiscoveryResultGroup>{
                                     state.scanResult
@@ -474,7 +524,7 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                                         : state.chargers.some(c => c.host == s.hostname + ".local" || c.host == s.ip) ?
                                                             __("component.discovery_result.already_added")
                                                         : null}
-                                                onClick={() => this.setState({addCharger: {host: s.hostname + ".local", name: s.display_name, rot: -1, uid: 0}})}>
+                                                onClick={() => this.setState({addCharger: {host: s.hostname + ".local", name: s.display_name, rot: -1, uid: 0, proto: 0, port: 502, phase_switch: false}})}>
                                                     {util.remoteAccessMode ? <div>{s.hostname + ".local"} / {s.ip}</div> : <div><a target="_blank" rel="noopener noreferrer" href={"http://" + s.hostname + ".local"}>{s.hostname + ".local"}</a> / <a target="_blank" rel="noopener noreferrer" href={"http://" + s.ip}>{s.ip}</a></div>}
                                               </DiscoveryResultItem>))
                                 }</DiscoveryResultGroup>

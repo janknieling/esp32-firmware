@@ -60,6 +60,12 @@ interface ChargerConfig {
     name: string,
     rot: number,
     uid: number,
+    /** control protocol: 0 = WARP management protocol, 1 = KEBA Modbus/TCP */
+    proto: number,
+    /** Modbus/TCP port (KEBA) */
+    port: number,
+    /** enable Modbus phase switching (KEBA) */
+    phase_switch: boolean,
 }
 
 export interface config {

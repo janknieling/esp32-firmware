@@ -42,6 +42,7 @@ struct CurrentAllocatorState;
 struct ChargerState;
 struct ChargerAllocationState;
 struct ChargerDecision;
+class KebaModbusCharger;
 
 namespace ChargeMode {
     enum Type {
@@ -182,6 +183,11 @@ private:
     micros_t last_available_current_update = 0_us;
 
     ChargerState *charger_state = nullptr;
+
+#if MODULE_MODBUS_TCP_CLIENT_AVAILABLE()
+    // One entry per charger slot; non-null only for KEBA Modbus/TCP chargers.
+    KebaModbusCharger **keba_chargers = nullptr;
+#endif
 
     ConfigRoot low_level_config;
 

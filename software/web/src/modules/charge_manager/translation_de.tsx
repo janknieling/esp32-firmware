@@ -76,6 +76,16 @@ let x = {
             "add_charger_found": "Gefundene Wallboxen",
             "add_charger_message": /*SFN*/(have: number, max: number) => `${have} von ${max} Wallboxen konfiguriert`/*NF*/,
             "add_charger_rotation": "Phasenrotation",
+            "charger_proto": "Wallbox-Typ",
+            "charger_proto_help": <>
+                <p>"WARP-Wallbox" steuert eine WARP Charger über das WARP-Management-Protokoll.</p>
+                <p>"KEBA (Modbus/TCP)" steuert eine KEBA KeContact P30 (x-series) Drittanbieter-Wallbox über Modbus/TCP, sodass sie am Lastmanagement teilnehmen kann. Bei der KEBA muss die Modbus/TCP-Schnittstelle aktiviert sein (DIP-Schalter DSW1.3 = ON) und eine Firmware verwendet werden, die diese unterstützt.</p>
+            </>,
+            "proto_warp": "WARP-Wallbox",
+            "proto_keba_modbus": "KEBA (Modbus/TCP)",
+            "charger_port": "Modbus/TCP-Port",
+            "charger_phase_switch": "Phasenumschaltung",
+            "charger_phase_switch_desc": "Dem Lastmanagement erlauben, die KEBA über Modbus zwischen ein- und dreiphasigem Laden umzuschalten.",
             "charger_rotation_help": <>
                 <p>Gibt an, wie die Wallbox in Relation zum Netzanschluss- bzw. PV-Überschuss-Zähler oder zu den anderen Wallboxen angeschlossen ist. Typischerweise werden nur rechtsdrehende Phasenrotationen verwendet.</p>
                 <p>Eine Wallbox, die, wenn sie einphasig lädt, die Netzanschlussphase L2 belastet, ist dann beispielsweise mit der Phasenrotation L231 angeschlossen.</p>

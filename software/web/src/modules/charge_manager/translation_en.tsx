@@ -76,6 +76,16 @@ let x = {
             "add_charger_found": "Discovered chargers",
             "add_charger_message": /*SFN*/(have: number, max: number) => `${have} of ${max} chargers configured`/*NF*/,
             "add_charger_rotation": "Phase rotation",
+            "charger_proto": "Charger type",
+            "charger_proto_help": <>
+                <p>"WARP charger" controls a WARP Charger via the WARP management protocol.</p>
+                <p>"KEBA (Modbus/TCP)" controls a third-party KEBA KeContact P30 (x-series) wallbox via Modbus/TCP, so it can be part of the load management. The KEBA must have the Modbus/TCP interface enabled (DIP switch DSW1.3 = ON) and a firmware that supports it.</p>
+            </>,
+            "proto_warp": "WARP charger",
+            "proto_keba_modbus": "KEBA (Modbus/TCP)",
+            "charger_port": "Modbus/TCP port",
+            "charger_phase_switch": "Phase switching",
+            "charger_phase_switch_desc": "Allow the load management to switch the KEBA between one and three phases via Modbus.",
             "charger_rotation_help": <>
                 <p>The chargers connection from the perspective of the grid or PV meter or the other chargers. Usually only positive sequence rotations are used.</p>
                 <p>A charger that only uses the grid phase L2 is then connected with the phase rotation L231.</p>
