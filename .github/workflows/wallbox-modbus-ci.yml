@@ -46,13 +46,31 @@ jobs:
                              capture_output=True, text=True, cwd='web/src')
           out = r.stdout + r.stderr
           import base64
-          lines = open('web/src/ts/translation.tsx', encoding='utf-8').read().split('\n')
+          text = open('web/src/ts/translation.tsx', encoding='utf-8').read()
+          lines = text.split('\n')
           errs = sorted(set(int(m.group(1)) for m in re.finditer(r'translation\.tsx\((\d+),', out)))
           first = errs[0] if errs else 9061
           print("first tsc error line:", first, "total error lines:", len(errs))
-          for i in range(max(0, first-3), min(len(lines), first+2)):
-              nonascii = [(j, hex(ord(c))) for j, c in enumerate(lines[i]) if ord(c) > 126]
-              print(i+1, "nonascii=", nonascii, "b64=", base64.b64encode(lines[i].encode()).decode())
+          # Print the first few actual tsc error messages
+          for l in out.split('\n'):
+              if 'translation.tsx' in l and 'error' in l:
+                  print("ERR:", l.strip()[:110])
+          print("--- first-error region (base64 per line) ---")
+          for i in range(max(0, first-4), min(len(lines), first+2)):
+              print(i+1, "b64=", base64.b64encode(lines[i].encode()).decode())
+          # Full-file scan for suspicious invisible/format characters
+          susp = {0x00AD:'SHY',0x200B:'ZWSP',0x200C:'ZWNJ',0x200D:'ZWJ',0x2060:'WJ',0xFEFF:'BOM',0x2011:'NBHY'}
+          print("--- suspicious chars in whole file ---")
+          hits = 0
+          for ln, line in enumerate(lines, 1):
+              for c in line:
+                  if ord(c) in susp:
+                      print("  line", ln, susp[ord(c)], repr(line[:70])); hits += 1
+                      break
+              if hits > 20:
+                  break
+          if hits == 0:
+              print("  none")
           PY
       - uses: actions/cache/save@v5
         if: always()
