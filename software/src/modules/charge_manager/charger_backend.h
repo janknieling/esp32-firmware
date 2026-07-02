@@ -20,6 +20,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <WString.h>
 
 #include "modules/cm_networking/generated/cm_auth_type.enum.h"
 
@@ -163,6 +164,10 @@ public:
     // charger arrays. host points to a persistent string; ctrl_config is the
     // active "ctrl" union member of this charger's config entry.
     virtual IChargerBackend *new_charger(uint8_t idx, const char *host, const Config *ctrl_config) = 0;
+
+    // Validate the "ctrl" union member of a charger config entry of this
+    // class. Return an error message or an empty string.
+    virtual String validate_ctrl_config(const Config *ctrl_config) { (void)ctrl_config; return ""; }
 
     // Called once after all charger backends have been created.
     virtual void setup_chargers_done() {}

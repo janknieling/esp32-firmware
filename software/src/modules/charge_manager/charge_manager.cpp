@@ -607,8 +607,13 @@ void ChargeManager::build_config()
                     return "there must not be two chargers with the same hostname or IP address";
 
             auto charger_class = chargers->get(i)->get("ctrl")->getTag<ChargerClassID>();
-            if (this->get_charger_generator(charger_class) == nullptr)
+            auto *generator = this->get_charger_generator(charger_class);
+            if (generator == nullptr)
                 return "charger class is not supported on this device";
+
+            String ctrl_error = generator->validate_ctrl_config((const Config *)chargers->get(i)->get("ctrl")->get());
+            if (!ctrl_error.isEmpty())
+                return ctrl_error;
         }
 
         return "";
