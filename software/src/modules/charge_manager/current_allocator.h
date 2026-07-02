@@ -22,10 +22,7 @@
 #include <functional>
 
 #include "charge_manager_private.h"
-
-struct cm_state_v1;
-struct cm_state_v2;
-struct cm_state_v3;
+#include "charger_backend.h"
 
 int allocate_current(
         const CurrentAllocatorConfig *cfg,
@@ -40,16 +37,12 @@ int allocate_current(
         ChargerAllocationState *charger_allocation_state,
         ChargerDecision *charger_decisions);
 
-void update_from_client_packet(
-    uint8_t client_id,
-    cm_state_v1 *v1,
-    cm_state_v2 *v2,
-    cm_state_v3 *v3,
+void update_charger_state(
+    uint8_t idx,
+    const ChargerRemoteState &rs,
     const CurrentAllocatorConfig *cfg,
     ChargerState *charger_state,
-    ChargerAllocationState *charger_allocation_state,
-    const char * const *hosts,
-    const std::function<const char *(uint8_t)> &get_charger_name);
+    ChargerAllocationState *charger_allocation_state);
 
 void apply_cost(const Cost &cost, CurrentLimits* limits);
 

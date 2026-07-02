@@ -27,20 +27,19 @@
 #include <LittleFS.h>
 
 #include "TFTools/Micros.h"
-#include "bindings/base58.h"
 
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
 #include "current_allocator.h"
+#include "charger_backend.h"
+#include "cm_charger_backend.h"
 #include "build.h"
-#include "modules/cm_networking/generated/cm_auth_feedback.enum.h"
 #include "options.h"
 #include "tools.h"
 #include "tools/malloc.h"
 #include "tools/hexdump.h"
 #include "generated/cm_phase_rotation.enum.h"
-#include "modules/cm_networking/generated/client_error.enum.h"
-#include "modules/cm_networking/cm_networking_defs.h"
+#include "modules/cm_networking/cm_networking_defs.h" // Only for MAX_CONTROLLED_CHARGERS
 #include <TFJson.h>
 
 #include "modules/users/users.h" // For USERS_AUTH_TYPE_* constants
@@ -326,28 +325,21 @@ void ChargeManager::pre_setup()
 #endif
 }
 
-static bool is_packet_stale(
-    uint8_t client_id,
-    cm_state_v1 *v1,
-    ChargerState *charger_state,
-    ChargerAllocationState *charger_allocation_state,
-    const char * const *hosts,
-    const std::function<const char *(uint8_t)> &get_charger_name
-    )
+bool ChargeManager::is_stale_state(uint8_t idx, uint32_t uptime)
 {
     auto now = now_us();
     // TODO: bounds check
-    auto &target = charger_state[client_id];
-    auto &target_alloc = charger_allocation_state[client_id];
+    auto &target = this->charger_state[idx];
+    auto &target_alloc = this->charger_allocation_state[idx];
 
     // Don't update if the uptimes are the same.
     // This means, that the EVSE hangs or the communication
     // is not working. As last_update will now hang too,
     // the management will stop all charging after some time.
-    if (target.uptime == v1->evse_uptime) {
-        logger.printfln("Received stale charger state from %s (%s). Reported EVSE uptime (%lu) is the same as in the last state. Is the EVSE still reachable?",
-            get_charger_name(client_id), hosts[client_id],
-            v1->evse_uptime);
+    if (target.uptime == uptime) {
+        logger.printfln("Received stale charger state from %s (%s). Reported charge controller uptime (%lu) is the same as in the last state. Is the charger still reachable?",
+            this->get_charger_name(idx), this->hosts[idx],
+            uptime);
         if ((target.last_update + 10_s) < now) {
             target_alloc.state = CASState::Error;
             target_alloc.error = CASError::EVSEUnreachable;
@@ -358,343 +350,96 @@ static bool is_packet_stale(
     return false;
 }
 
-static uint16_t get_user_current(uint8_t user_id) {
-#if MODULE_USERS_AVAILABLE()
-        return users.get_user_current(user_id);
-#else
-        return 32000;
-#endif
-}
-
-static constexpr int16_t NOT_AUTHORIZED = -1;
-static constexpr int16_t UNKNOWN_NFC_TAG = -2;
-static constexpr int16_t AUTHD_ANONYMOUSLY = 0;
-
-static void update_charge_tracking(
-    uint8_t client_id,
-    cm_state_v1 *v1,
-    const CurrentAllocatorConfig *cfg,
-    ChargerState *charger_state)
+void ChargeManager::update_charger_uid(uint8_t idx, uint32_t uid)
 {
-#if MODULE_CHARGE_TRACKER_AVAILABLE()
-    if (!cfg->enable_central_management)
-        return;
-
-    auto now = now_us();
-    // TODO: bounds check
-    auto &target = charger_state[client_id];
-
-    // Populate first and last tracked charge when we first see this charger
-    if (target.last_update == 0_us) {
-        char uid_str[15];
-        bool is_local_charger = false;
-        if (target.uid == esp32_common.get_uid_num()) {
-            is_local_charger = true;
-        } else {
-            tf_base58_encode(target.uid, uid_str);
-        }
-
-        ChargeStart cs;
-
-        if (charge_tracker.currentlyCharging(is_local_charger ? nullptr : uid_str, &cs)) {
-            if (v1->charger_state != 0 && (target.authenticated_user_id < 0 || target.authenticated_user_id == cs.user_id)) {
-                // Car is still connected and we trust our charge tracking. Authenticate for tracked user.
-                target.authenticated_user_id = cs.user_id;
-                target.user_current = get_user_current(target.authenticated_user_id);
-            } else {
-                // Car not connected or we've already authenticated another user than was tracked the last time.
-                // Track stop (and potentially track start below for other user)
-                charge_tracker.endCharge(
-                    0, // We don't know when the car was disconnected -> unknown duration
-                    v1->energy_abs,
-                    is_local_charger ? nullptr : uid_str);
-            }
-        }
-    }
-
-    // If tracking, a vehicle is plugged in and we are authenticated, track a start if not done already.
-    if (v1->charger_state != 0 && target.authenticated_user_id != NOT_AUTHORIZED && target.authenticated_user_id != UNKNOWN_NFC_TAG) {
-        char uid_str[15];
-        bool is_local_charger = false;
-        if (target.uid == esp32_common.get_uid_num()) {
-            is_local_charger = true;
-        } else {
-            tf_base58_encode(target.uid, uid_str);
-        }
-
-        // TODO: optimize this!
-        if (!charge_tracker.currentlyCharging(is_local_charger ? nullptr : uid_str)) {
-            uint32_t charge_start = 0;
-            timeval _timeval;
-            if (rtc.clock_synced(&_timeval))
-                charge_start = rtc.timestamp_minutes();
-
-            charge_tracker.startCharge(charge_start,
-                                       v1->energy_abs,
-                                       target.authenticated_user_id,
-                                       v1->evse_uptime,
-                                       CMAuthType::None,
-                                       Config::ConfVariant(),
-                                       is_local_charger ? nullptr : uid_str);
-        }
-    }
-
-    // If tracking and no vehicle is plugged in track a stop if not done already.
-    if (v1->charger_state == 0) {
-        char uid_str[15];
-        bool is_local_charger = false;
-        if (target.uid == esp32_common.get_uid_num()) {
-            is_local_charger = true;
-        } else {
-            tf_base58_encode(target.uid, uid_str);
-        }
-
-        if (charge_tracker.currentlyCharging(is_local_charger ? nullptr : uid_str)) {
-            charge_tracker.endCharge(
-                (now - target.last_plug_in).to<seconds_t>().as<uint32_t>(),
-                v1->energy_abs,
-                is_local_charger ? nullptr : uid_str);
-        }
-    }
-#endif
-}
-
-static bool on_auth_success(uint8_t new_user_id,
-    uint8_t client_id,
-    ChargerState *charger_state)
-{
-    auto &target = charger_state[client_id];
-    if (target.authenticated_user_id == NOT_AUTHORIZED || target.authenticated_user_id == UNKNOWN_NFC_TAG) {
-        // Authorize
-        target.authenticated_user_id = new_user_id;
-        target.user_current = get_user_current(target.authenticated_user_id);
-        return true;
-    }
-
-    if (target.authenticated_user_id != new_user_id) {
-        // Only allow deauthorize if this is the same user as the one that is authorized.
-        return false;
-    }
-
-    // Deauthorize
-    target.authenticated_user_id = NOT_AUTHORIZED;
-    target.user_current = get_user_current(target.authenticated_user_id);
-    return true;
-}
-
-static void update_authentication(
-    uint8_t client_id,
-    cm_state_v1 *v1,
-    cm_state_v5 *v5,
-    const CurrentAllocatorConfig *cfg,
-    ChargerState *charger_state)
-{
-    // TODO: bounds check
-    auto &target = charger_state[client_id];
-
-    if (v5 == nullptr) {
-        memset(target.auth_info, 0, sizeof(target.auth_info));
-    } else {
-        memcpy(target.auth_info, v5->auth_info, sizeof(target.auth_info));
-    }
-
-    micros_t deadtime = 30_s;
-#if MODULE_NFC_AVAILABLE()
-    deadtime = nfc.get_deadtime_post_start();
-#endif
-
-    // If central auth is disabled, always authorize
-    if (!cfg->enable_central_management) {
-        target.authenticated_user_id = AUTHD_ANONYMOUSLY;
-        target.user_current = get_user_current(target.authenticated_user_id);
-        return;
-    }
-
-    // De-authorize on plug out
-    if (v1->charger_state == 0 && target.charger_state != 0) {
-        target.authenticated_user_id = NOT_AUTHORIZED;
-        target.user_current = 0;
-
-        // Allow re-auth immediately
-        target.last_auth_success_timestamp = -deadtime;
-    }
-
-    // De-authorize when the last auth expires and there is still no car connected
-    if (target.last_auth_success_timestamp != 0_us && deadline_elapsed(target.last_auth_success_timestamp + 30_s) && v1->charger_state == 0) {
-        target.authenticated_user_id = NOT_AUTHORIZED;
-        target.user_current = 0;
-    }
-
-    // If we are still in the auth deadtime, ignore new auths.
-    if (target.last_auth_success_timestamp != 0_us && !deadline_elapsed(target.last_auth_success_timestamp + deadtime)) {
-        return;
-    }
-
-    if (v5 == nullptr)
-        return;
-
-    micros_t latest_auth_fail = 0_us;
-    for (int i = ARRAY_SIZE(v5->auth_info) - 1; i >= 0; --i) {
-        const cm_auth_info &info = v5->auth_info[i];
-        if (info.last_seen_s != 0 && info.last_seen_s < 2) {
-            int16_t tag_auth = NOT_AUTHORIZED;
-#if MODULE_CHARGE_AUTHORIZATION_AVAILABLE()
-            tag_auth = charge_authorization.find_user(info);
-            if (tag_auth == -1)
-                tag_auth = UNKNOWN_NFC_TAG;
-#endif
-            if (tag_auth >= AUTHD_ANONYMOUSLY && on_auth_success((uint8_t) tag_auth, client_id, charger_state)) {
-                target.last_auth_success_timestamp = now_us() - seconds_t{info.last_seen_s};
-                break; // A successful auth wins immediately.
-            } else if (tag_auth == UNKNOWN_NFC_TAG) {
-                latest_auth_fail = now_us() - seconds_t{info.last_seen_s};
-            }
-        }
-    }
-
-    if (latest_auth_fail != 0_us) {
-        target.last_auth_fail_timestamp = latest_auth_fail;
-    }
-}
-
-static void update_uid(uint8_t client_id, cm_state_v1 *v1, Config *config, ChargerState *charger_state) {
-    if (client_id >= config->get("chargers")->count())
+    if (idx >= this->config.get("chargers")->count())
         return;
 
     // Populate and save UID if not yet stored for this charger
-    if (config->get("chargers")->get(client_id)->get("uid")->asUint() == 0 && v1->esp32_uid != 0) {
-        config->get("chargers")->get(client_id)->get("uid")->updateUint(v1->esp32_uid);
-        api.writeConfig("charge_manager/config", config);
+    if (this->config.get("chargers")->get(idx)->get("uid")->asUint() == 0 && uid != 0) {
+        this->config.get("chargers")->get(idx)->get("uid")->updateUint(uid);
+        api.writeConfig("charge_manager/config", &this->config);
 
-        const String &name = config->get("chargers")->get(client_id)->get("name")->asString();
-        charge_manager.rename_charger(v1->esp32_uid, name);
+        const String &name = this->config.get("chargers")->get(idx)->get("name")->asString();
+        this->rename_charger(uid, name);
     }
-    auto &target = charger_state[client_id];
-    target.uid = v1->esp32_uid;
+    this->charger_state[idx].uid = uid;
 }
 
-static void update_charge_mode(uint8_t client_id, cm_state_v1 *v1, cm_state_v4 *v4, ChargerState *charger_state) {
-    // If requested_charge_mode is default, no charge mode change is requested.
-    if (v4 != nullptr && v4->requested_charge_mode != (uint8_t)ConfigChargeMode::Default)
-        charger_state[client_id].charge_mode = charge_manager.config_cm_to_cm((ConfigChargeMode)v4->requested_charge_mode);
+bool ChargeManager::ingest_remote_state(uint8_t idx, const ChargerRemoteState &rs, const std::function<void()> &backend_pre_update)
+{
+    if (this->is_stale_state(idx, rs.uptime))
+        return false;
 
-    // If the car is unplugged, change back to the default charge mode once.
-    if (v1->charger_state == 0 && charger_state[client_id].charger_state != 0) {
-        charger_state[client_id].charge_mode = charge_manager.config_cm_to_cm(ConfigChargeMode::Default);
-    }
+    this->update_charger_uid(idx, rs.uid);
+
+    if (backend_pre_update)
+        backend_pre_update();
+
+    update_charger_state(idx, rs, this->ca_config, this->charger_state, this->charger_allocation_state);
+
+    this->update_charger_state_config(idx);
+
+    return true;
+}
+
+void ChargeManager::ingest_client_error(uint8_t idx, CASError error)
+{
+    //TODO bounds check
+    auto &target_alloc = this->charger_allocation_state[idx];
+    target_alloc.state = CASState::Error;
+
+    target_alloc.error = error;
+    //TODO: should we call update_charger_state_config(idx); here? This is currently missing but smells weird.
+}
+
+void ChargeManager::request_urgent_send(uint8_t idx)
+{
+    if (this->charger_state[idx].last_send_was_urgent)
+        return;
+
+    this->charger_state[idx].last_send_was_urgent = true;
+    this->override_next_client_send = idx;
+    // This task will run directly after the one that is rescheduled in trigger_allocator_run.
+    // Multiple rescheduleNow calls are executed backwards.
+    task_scheduler.rescheduleNow(this->send_client_task_id);
+}
+
+bool ChargeManager::central_management_enabled() const
+{
+    return this->ca_config->enable_central_management;
 }
 
 bool ChargeManager::send_client_packet(uint8_t i) {
     auto &charger_alloc = this->charger_allocation_state[i];
 
-    auto ignore_allocation = false;
-    auto current = charger_alloc.allocated_current;
-    auto cp_disconnect = charger_alloc.cp_disconnect;
-    auto phases = charger_alloc.allocated_phases;
-    auto charge_mode = this->cm_to_config_cm(this->charger_state[i].charge_mode);
-
-    CMAuthFeedback auth_feedback = CMAuthFeedback::None;
-    if (this->ca_config->enable_central_management) {
-        auto &charger = this->charger_state[i];
-
-        if (!deadline_elapsed(charger.last_auth_success_timestamp + 2_s)) {
-            auth_feedback = CMAuthFeedback::Ack;
-        } else if (!deadline_elapsed(charger.last_auth_fail_timestamp + 2_s)) {
-            auth_feedback = CMAuthFeedback::Nack;
-        } else if (charger.charger_state == 1 && charger.authenticated_user_id == NOT_AUTHORIZED) {
-            auth_feedback = CMAuthFeedback::Nag;
-        }
-    }
+    ChargerCommand cmd;
+    cmd.allocated_current = charger_alloc.allocated_current;
+    cmd.allocated_phases = charger_alloc.allocated_phases;
+    cmd.cp_disconnect = charger_alloc.cp_disconnect;
 
     // If we've never seen a packet from this charger, send "ignore allocation".
     // This means we (the charge manager) have rebooted and either our uptime is < 30 seconds or the charger has stopped charging
     // (managed chargers set the managed slot to 0 if they don't receive a packet for 30 seconds)
     // We assume the the last allocation (before the reboot) is fine for up to 30 seconds.
-    if (!all_chargers_seen || this->charger_state[i].last_update == 0_us) {
-        ignore_allocation = true; // This requires managed chargers to support cm_command_v3!
-        charge_mode = ConfigChargeMode::Default; // This will instruct the managed charger to send its charge mode back as if it wants to request a charge mode change
+    cmd.ignore_allocation = !all_chargers_seen || this->charger_state[i].last_update == 0_us;
 
-        // Set sane defaults for managed chargers with older firmwares
-        current = std::numeric_limits<decltype(current)>::max(); // Directly passed through to the EVSE bricklet, which ignores values > 32000
-        cp_disconnect = false; // Way more likely to be correct than that the manager restarted while a phase switch was in progress
-        phases = 0; // 0 phases are ignored except with WARP* firmware == 2.6.0. 2.6.1 fixed this two weeks later
-    }
-
-    return cm_networking.send_manager_update(i,
-                                             ignore_allocation,
-                                             current,
-                                             cp_disconnect,
-                                             phases,
-                                             charge_mode,
-                                             this->supported_charge_mode_bitmask,
-                                             auth_feedback,
-                                             this->ca_config->enable_central_management,
-                                             this->ca_config->enable_central_management);
+    return this->backends[i]->send_update(cmd);
 }
 
 void ChargeManager::start_manager_task()
 {
-    auto get_charger_name_fn = [this](uint8_t i){ return this->get_charger_name(i);};
+    // All chargers are currently controlled via the CM protocol, so the CM
+    // client ids map 1:1 to the charger indices.
+    auto *cm_charger_idx = (uint8_t *)calloc_psram_or_dram(charger_count, sizeof(uint8_t));
+    this->backends = (IChargerBackend **)calloc_psram_or_dram(charger_count, sizeof(IChargerBackend *));
 
-    cm_networking.register_manager(this->hosts.get(), charger_count, [this, get_charger_name_fn](uint8_t client_id, cm_state_v1 *v1, cm_state_v2 *v2, cm_state_v3 *v3, cm_state_v4 *v4, cm_state_v5 *v5) mutable {
-            if (is_packet_stale(
-                    client_id,
-                    v1,
-                    this->charger_state,
-                    this->charger_allocation_state,
-                    this->hosts.get(),
-                    get_charger_name_fn))
-                return;
+    for (size_t i = 0; i < charger_count; ++i) {
+        cm_charger_idx[i] = (uint8_t)i;
+        this->backends[i] = new CMChargerBackend((uint8_t)i, (uint8_t)i);
+    }
 
-            update_uid(client_id, v1, &this->config, this->charger_state);
-
-            update_charge_mode(client_id, v1, v4, this->charger_state);
-
-            update_authentication(client_id, v1, v5, this->ca_config, this->charger_state);
-
-            update_charge_tracking(client_id, v1, this->ca_config, this->charger_state);
-
-            update_from_client_packet(
-                    client_id,
-                    v1,
-                    v2,
-                    v3,
-                    this->ca_config,
-                    this->charger_state,
-                    this->charger_allocation_state,
-                    this->hosts.get(),
-                    get_charger_name_fn
-                    );
-
-            update_charger_state_config(client_id);
-
-            if (CM_FEATURE_FLAGS_URGENT_IS_SET(v1->feature_flags) && !this->charger_state[client_id].last_send_was_urgent) {
-                this->charger_state[client_id].last_send_was_urgent = true;
-                this->override_next_client_send = client_id;
-                // This task will run directly after the one that is rescheduled in trigger_allocator_run.
-                // Multiple rescheduleNow calls are executed backwards.
-                task_scheduler.rescheduleNow(this->send_client_task_id);
-            }
-
-            if (CM_FEATURE_FLAGS_REQUEST_REALLOCATION_IS_SET(v1->feature_flags)) {
-                trigger_allocator_run(false);
-            }
-    }, [this](uint8_t client_id, ClientError error){
-        static_assert(std::is_same_v<std::underlying_type_t<ClientError>, std::underlying_type_t<CASError>>);
-        static_assert(ClientError::_min == ClientError::OK);
-        static_assert(ClientError::_max == ClientError::NotManaged);
-        static_assert(to_underlying(ClientError::_max) - to_underlying(ClientError::_min) == 3);
-        static_assert(to_underlying(ClientError::OK) == to_underlying(CASError::OK));
-        static_assert(to_underlying(ClientError::InvalidHeader) == to_underlying(CASError::InvalidHeader));
-        static_assert(to_underlying(ClientError::NotManaged) == to_underlying(CASError::NotManaged));
-
-        //TODO bounds check
-        auto &target_alloc = this->charger_allocation_state[client_id];
-        target_alloc.state = CASState::Error;
-
-        target_alloc.error = (CASError) error;
-        //TODO: should we call update_charger_state_config(client_id); here? This is currently missing but smells weird.
-    });
+    CMChargerBackend::register_all(this->hosts.get(), cm_charger_idx, charger_count);
 
     millis_t cm_send_delay = 1_s / millis_t{charger_count};
 
@@ -953,7 +698,7 @@ void ChargeManager::setup()
 
             for (size_t i = 0; i < charger_count; ++i) {
                 if (this->charger_state[i].last_update == 0_us)
-                    cm_networking.notify_charger_unresponsive(i);
+                    this->backends[i]->notify_unresponsive();
 
                 auto allocd_current = this->charger_state[i].allowed_current;
                 auto allocd_phases = this->charger_state[i].phases;
@@ -1022,7 +767,7 @@ void ChargeManager::run_allocator()
         this->charger_state,
         this->hosts.get(),
         [this](uint8_t idx) {return this->get_charger_name(idx);},
-        [](uint8_t charger_index) {return cm_networking.notify_charger_unresponsive(charger_index);},
+        [this](uint8_t charger_index) {this->backends[charger_index]->notify_unresponsive();},
 
         this->ca_state,
         this->charger_allocation_state,

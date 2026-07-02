@@ -18,10 +18,15 @@
 #include "generated/three_phase_decision.union.h"
 #include "generated/current_decision.union.h"
 
-#include "modules/cm_networking/cm_networking_defs.h"
+#include "charger_backend.h"
 
 constexpr micros_t RE_RESOLVE_TIMEOUT = 6_s; // Must be less than CHARGER_UNREACHABLE_TIMEOUT.
 constexpr micros_t CHARGER_UNREACHABLE_TIMEOUT = 32_s;
+
+// Semantics of ChargerState::authenticated_user_id
+static constexpr int16_t NOT_AUTHORIZED = -1;
+static constexpr int16_t UNKNOWN_NFC_TAG = -2;
+static constexpr int16_t AUTHD_ANONYMOUSLY = 0;
 
 struct ChargerDecision {
     ZeroPhaseDecision zero;
@@ -176,8 +181,8 @@ struct ChargerState {
     micros_t last_auth_success_timestamp;
     micros_t last_auth_fail_timestamp;
 
-    // Last NFC tags seen on this charger (from cm_state_v5)
-    cm_auth_info auth_info[3];
+    // Last NFC tags seen on this charger
+    ChargerAuthInfo auth_info[3];
 };
 
 struct ChargerAllocationState {

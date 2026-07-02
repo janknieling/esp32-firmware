@@ -27,7 +27,10 @@
 #include "modules/automation/automation_backend.h"
 #endif
 
+#include <functional>
+
 #include "current_limits.h"
+#include "generated/cas_error.enum.h"
 #include "modules/cm_networking/generated/config_charge_mode.enum.h"
 
 // File to store charger names for charge tracking, similar to USERNAME_FILE in the users module.
@@ -42,6 +45,8 @@ struct CurrentAllocatorState;
 struct ChargerState;
 struct ChargerAllocationState;
 struct ChargerDecision;
+struct ChargerRemoteState;
+class IChargerBackend;
 
 namespace ChargeMode {
     enum Type {
@@ -112,6 +117,24 @@ public:
     ChargerState *find_charger_state(uint32_t uid);
     int8_t get_charger_state_index(const ChargerState *state);
 
+    // Interface for charger backends (see charger_backend.h):
+
+    // Ingest a state update received from a charger. backend_pre_update (may
+    // be nullptr) runs after the staleness check and UID update, but before
+    // the received state is applied to the ChargerState, so that backends can
+    // inject protocol-specific updates that compare against the old state.
+    // Returns false if the state was stale and has been dropped.
+    bool ingest_remote_state(uint8_t idx, const ChargerRemoteState &rs, const std::function<void()> &backend_pre_update = nullptr);
+
+    // Report a protocol error for a charger; shown in the web interface.
+    void ingest_client_error(uint8_t idx, CASError error);
+
+    // Request that the next send task iteration sends to this charger first.
+    void request_urgent_send(uint8_t idx);
+
+    bool central_management_enabled() const;
+    const std::array<uint8_t, 2> &get_supported_charge_mode_bitmask() const { return supported_charge_mode_bitmask; }
+
     size_t trace_buffer_index;
 
     uint8_t config_cm_to_cm(ConfigChargeMode power_manager_charge_mode);
@@ -126,6 +149,9 @@ private:
     bool seen_all_chargers();
     void start_manager_task();
     void check_watchdog();
+
+    bool is_stale_state(uint8_t idx, uint32_t uptime);
+    void update_charger_uid(uint8_t idx, uint32_t uid);
 
     void update_charger_state_config(uint8_t idx);
     void update_charger_state_from_mode(ChargerState *state, int charger_idx);
@@ -224,6 +250,7 @@ private:
     ConfigChargeMode pm_default_charge_mode;
 
     ChargerAllocationState *charger_allocation_state = nullptr;
+    IChargerBackend **backends = nullptr;
     CurrentAllocatorConfig *ca_config = nullptr;
     CurrentAllocatorState *ca_state = nullptr;
 

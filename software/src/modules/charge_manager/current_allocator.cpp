@@ -30,7 +30,7 @@
 #include "generated/module_dependencies.h"
 #include "tools/printf.h"
 
-#include "modules/cm_networking/cm_networking_defs.h"
+#include "modules/cm_networking/cm_networking_defs.h" // Only for MAX_CONTROLLED_CHARGERS
 #include "current_allocator_private.h"
 #include "tools/string_builder.h"
 
@@ -75,24 +75,20 @@ static CASState get_charge_state(uint8_t charger_state, uint16_t supported_curre
 }
 
 
-void update_from_client_packet(
-    uint8_t client_id,
-    cm_state_v1 *v1,
-    cm_state_v2 *v2,
-    cm_state_v3 *v3,
+void update_charger_state(
+    uint8_t idx,
+    const ChargerRemoteState &rs,
     const CurrentAllocatorConfig *cfg,
     ChargerState *charger_state,
-    ChargerAllocationState *charger_allocation_state,
-    const char * const *hosts,
-    const std::function<const char *(uint8_t)> &get_charger_name
+    ChargerAllocationState *charger_allocation_state
     )
 {
     auto now = now_us();
     // TODO: bounds check
-    auto &target = charger_state[client_id];
-    auto &target_alloc = charger_allocation_state[client_id];
+    auto &target = charger_state[idx];
+    auto &target_alloc = charger_allocation_state[idx];
 
-    target.uptime = v1->evse_uptime;
+    target.uptime = rs.uptime;
 
     // If we've just resolved this charger but the charger did not reboot
     // we can receive a packet before successfully sending the first one
@@ -105,7 +101,7 @@ void update_from_client_packet(
 
 #if MODULE_FIRMWARE_UPDATE_AVAILABLE() && MODULE_EM_V1_AVAILABLE() && !MODULE_EVSE_COMMON_AVAILABLE()
     // Immediately block firmware updates if this charger reports a connected vehicle.
-    if (v1->charger_state != 0)
+    if (rs.charger_state != 0)
         firmware_update.vehicle_connected = true;
 #endif
 
@@ -115,49 +111,49 @@ void update_from_client_packet(
     //         or 2 (i.e. already have current allocated)
     // OR the charger is already charging
     // AND the charger is authorized
-    bool wants_to_charge = ((v1->car_stopped_charging == 0 && v1->supported_current != 0 && (v1->charger_state == 1 || v1->charger_state == 2)) || v1->charger_state == 3) && target.user_current > 0;
+    bool wants_to_charge = ((rs.car_stopped_charging == 0 && rs.supported_current != 0 && (rs.charger_state == 1 || rs.charger_state == 2)) || rs.charger_state == 3) && target.user_current > 0;
     target.wants_to_charge = wants_to_charge;
 
     // A charger wants to charge and has low priority if it has already charged this vehicle
     // AND only the charge manager slot (charger_state == 1, supported_current != 0) or no slot (charger_state == 2) blocks.
     // AND the charger is authorized
-    bool low_prio = v1->car_stopped_charging != 0 && v1->supported_current != 0 && (v1->charger_state == 1 || v1->charger_state == 2) && target.user_current > 0;
+    bool low_prio = rs.car_stopped_charging != 0 && rs.supported_current != 0 && (rs.charger_state == 1 || rs.charger_state == 2) && target.user_current > 0;
 
     if (!target.wants_to_charge_low_priority && low_prio)
         target.last_wakeup = now - cfg->wakeup_time;
 
     target.wants_to_charge_low_priority = low_prio;
 
-    target.is_charging = v1->charger_state == 3 && target.user_current > 0;
-    if (v1->charger_state != 1 && v1->charger_state != 2)
+    target.is_charging = rs.charger_state == 3 && target.user_current > 0;
+    if (rs.charger_state != 1 && rs.charger_state != 2)
         target.last_wakeup = 0_us;
 
     // Reset allocated energy if no car is connected
-    if (v1->charger_state == 0) {
+    if (rs.charger_state == 0) {
         target.allocated_energy = 0;
         target.allocated_average_power = 0;
         target_alloc.allocated_current = 0;
         target_alloc.allocated_phases = 0;
     }
 
-    target.allowed_current = v1->allowed_charging_current;
+    target.allowed_current = rs.allowed_current;
 
-    if (target.supported_current != v1->supported_current)
-        trace("RECV %d: supported %u -> %u mA", client_id, target.supported_current, v1->supported_current);
-    target.supported_current = v1->supported_current;
-    target.cp_disconnect_supported = CM_FEATURE_FLAGS_CP_DISCONNECT_IS_SET(v1->feature_flags);
-    target.cp_disconnect_state = CM_STATE_FLAGS_CP_DISCONNECTED_IS_SET(v1->state_flags);
+    if (target.supported_current != rs.supported_current)
+        trace("RECV %d: supported %u -> %u mA", idx, target.supported_current, rs.supported_current);
+    target.supported_current = rs.supported_current;
+    target.cp_disconnect_supported = rs.cp_disconnect_supported;
+    target.cp_disconnect_state = rs.cp_disconnect_state;
 
-    if (target.charger_state == 0 && v1->charger_state != 0) {
+    if (target.charger_state == 0 && rs.charger_state != 0) {
         target.last_plug_in = now;
 
         // Wait for A -> non-A transitions, but ignore chargers that are already in a non-A state in their first packet.
         // Only set the timestamp if plug_in_time is != 0: This feature is deactivated if the time is set to 0.
-        if (target.last_update != 0_us && target.charger_state == 0 && v1->charger_state != 0 && cfg->plug_in_time != 0_us)
+        if (target.last_update != 0_us && target.charger_state == 0 && rs.charger_state != 0 && cfg->plug_in_time != 0_us)
             target.just_plugged_in_timestamp = now;
     }
 
-    if (v1->charger_state == 0 && (target.charger_state != 0 || target.last_update == 0_us)) {
+    if (rs.charger_state == 0 && (target.charger_state != 0 || target.last_update == 0_us)) {
         target.last_plug_out = now;
     }
 
@@ -166,7 +162,7 @@ void update_from_client_packet(
     // The delay between the phase switch and the car requesting current again
     // could be longer than the hysteresis. In that case we would be able to
     // immediately phase switch again after switching to C, if we don't prevent this here.
-    if (target.charger_state != v1->charger_state && v1->charger_state == 3)
+    if (target.charger_state != rs.charger_state && rs.charger_state == 3)
         target.last_phase_switch = now;
 
     // If this charger just switched from C to B2 (i.e. the contactor switched off,
@@ -177,34 +173,34 @@ void update_from_client_packet(
     // This is necessary because some vehicles (for example the e-Golf)
     // start charging for after a phase switch even if the battery is full.
     // The vehicle stops after ~ 45 seconds.
-    if (target.charger_state == 3 && v1->charger_state == 2)
+    if (target.charger_state == 3 && rs.charger_state == 2)
         target.last_phase_switch = now;
 
-    if (v1->charger_state == 0) {
+    if (rs.charger_state == 0) {
         target.last_phase_switch = -cfg->global_hysteresis;
         target.time_in_state_c = 0_us;
         target.last_plug_in = 0_us;
         target.last_switch_on = 0_us;
     }
 
-    target.charger_state = v1->charger_state;
+    target.charger_state = rs.charger_state;
     target.last_update = now;
 
-    uint16_t requested_current = v1->supported_current;
+    uint16_t requested_current = rs.supported_current;
 
-    if (v2 != nullptr && v1->charger_state == 3 && v2->time_since_state_change >= cfg->requested_current_threshold * 1000) {
+    if (rs.time_since_state_change_known && rs.charger_state == 3 && rs.time_since_state_change >= cfg->requested_current_threshold * 1000) {
         int max_phase_current = -1;
 
         for (int i = 0; i < 3; i++) {
             // If this client's energy meter does not support measuring line currents,
             // they are sent as nan.
-            if (isnan(v1->line_currents[i])) {
+            if (isnan(rs.line_currents[i])) {
                 // Don't trust the line currents if one is missing.
                 max_phase_current = 32000;
                 break;
             }
 
-            max_phase_current = std::max(max_phase_current, (int)(v1->line_currents[i] * 1000.0f));
+            max_phase_current = std::max(max_phase_current, (int)(rs.line_currents[i] * 1000.0f));
         }
         // Clients send 0 instead of nan if they have no energy meter connected.
         // We could fix this, but for compatibility with older client firmwares,
@@ -217,25 +213,25 @@ void update_from_client_packet(
         max_phase_current += cfg->requested_current_margin;
 
         max_phase_current = std::max(6000, std::min(32000, max_phase_current));
-        requested_current = std::min(v1->supported_current, (uint16_t)max_phase_current);
+        requested_current = std::min(rs.supported_current, (uint16_t)max_phase_current);
     }
     if (abs((int)target.requested_current - (int)requested_current) > 1500) {
-        trace("RECV %d: requested %u -> %u mA (measured %.3fA %.3fA %.3fA)", client_id, target.requested_current, requested_current, v1->line_currents[0], v1->line_currents[1], v1->line_currents[2]);
+        trace("RECV %d: requested %u -> %u mA (measured %.3fA %.3fA %.3fA)", idx, target.requested_current, requested_current, rs.line_currents[0], rs.line_currents[1], rs.line_currents[2]);
     }
 
     target.requested_current = requested_current;
 
-    target.meter_supported = CM_FEATURE_FLAGS_METER_IS_SET(v1->feature_flags);
-    if (!isnan(v1->power_total)) {
-        target.power_total_sum = target.power_total_sum + v1->power_total;
+    target.meter_supported = rs.meter_supported;
+    if (!isnan(rs.power_total)) {
+        target.power_total_sum = target.power_total_sum + rs.power_total;
         target.power_total_count = target.power_total_count + 1;
     }
-    if (!isnan(v1->energy_abs)) {
-        target.energy_abs = v1->energy_abs;
+    if (!isnan(rs.energy_abs)) {
+        target.energy_abs = rs.energy_abs;
     }
 
-    if (v1->error_state != 0) {
-        target_alloc.error = static_cast<CASError>(static_cast<uint8_t>(CASError::ClientErrorOK) + v1->error_state);
+    if (rs.error_state != 0) {
+        target_alloc.error = static_cast<CASError>(static_cast<uint8_t>(CASError::ClientErrorOK) + rs.error_state);
     }
 
     if (target_alloc.error < CASError::ClientErrorOK || target_alloc.error == CASError::EVSEUnreachable) {
@@ -243,28 +239,28 @@ void update_from_client_packet(
     }
 
     if (target_alloc.error == CASError::OK || target_alloc.error >= CASError::ClientErrorOK) {
-        target_alloc.state = get_charge_state(v1->charger_state,
-                                              v1->supported_current,
-                                              v1->car_stopped_charging,
+        target_alloc.state = get_charge_state(rs.charger_state,
+                                              rs.supported_current,
+                                              rs.car_stopped_charging,
                                               target_alloc.allocated_current);
 
         // Override with UserBlocked if the charger has an unauthorized NFC tag and is not yet actively charging
         // This prevents unauthorized users from starting a charge session
-        if (target.user_current == 0 && v1->charger_state != 0) {
+        if (target.user_current == 0 && rs.charger_state != 0) {
             target_alloc.state = CASState::Unauthorized;
         }
     }
 
-    if (v3 != nullptr) {
-        uint8_t new_phases = CM_STATE_V3_PHASES_CONNECTED_GET(v3->phases);
-        uint8_t new_pss =  CM_STATE_V3_CAN_PHASE_SWITCH_IS_SET(v3->phases);
-        uint8_t new_switching =  CM_STATE_V3_CURRENTLY_SWITCHING_IS_SET(v3->phases);
+    if (rs.phases_known) {
+        uint8_t new_phases = rs.phases;
+        uint8_t new_pss = rs.phase_switch_supported;
+        uint8_t new_switching = rs.currently_switching_phases;
         if (new_phases != target.phases)
-            trace("RECV %d: phases %u -> %u", client_id, target.phases, new_phases);
+            trace("RECV %d: phases %u -> %u", idx, target.phases, new_phases);
         if (new_pss != target.phase_switch_supported)
-            trace("RECV %d: phase_switch_supported %u -> %u", client_id, target.phase_switch_supported, new_pss);
+            trace("RECV %d: phase_switch_supported %u -> %u", idx, target.phase_switch_supported, new_pss);
         if (new_switching != target.currently_switching_phases)
-            trace("RECV %d: currently_switching_phases %u -> %u", client_id, target.currently_switching_phases, new_switching);
+            trace("RECV %d: currently_switching_phases %u -> %u", idx, target.currently_switching_phases, new_switching);
         target.phases = new_phases;
         target.phase_switch_supported = new_pss;
         target.currently_switching_phases = new_switching;
