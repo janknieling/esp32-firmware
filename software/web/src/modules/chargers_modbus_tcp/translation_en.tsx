@@ -37,7 +37,7 @@ let x = {
             "register_offset": "Offset",
             "register_scale": "Scale factor",
             "register_scale_help": <><p>Value = (raw value + offset) × scale factor. Example: if the wallbox reports power in mW, a scale factor of 0.001 yields the expected unit W.</p></>,
-            "register_row": /*SFN*/(role: string, address: number) => `${role} @ ${address}`/*NF*/,
+            "register_row": /*SFN*/(role: string, addr: number) => `${role} @ ${addr}`/*NF*/,
             "register_add_title": "Add register",
             "register_add_message": /*SFN*/(have: number, max: number) => `${have} of ${max} registers configured`/*NF*/,
             "register_edit_title": "Edit register",

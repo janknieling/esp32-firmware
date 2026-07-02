@@ -37,7 +37,7 @@ let x = {
             "register_offset": "Offset",
             "register_scale": "Skalierungsfaktor",
             "register_scale_help": <><p>Wert = (Rohwert + Offset) × Skalierungsfaktor. Beispiel: Liefert die Wallbox die Leistung in mW, ergibt ein Skalierungsfaktor von 0,001 die erwartete Einheit W.</p></>,
-            "register_row": /*SFN*/(role: string, address: number) => `${role} @ ${address}`/*NF*/,
+            "register_row": /*SFN*/(role: string, addr: number) => `${role} @ ${addr}`/*NF*/,
             "register_add_title": "Register hinzufügen",
             "register_add_message": /*SFN*/(have: number, max: number) => `${have} von ${max} Registern konfiguriert`/*NF*/,
             "register_edit_title": "Register bearbeiten",
