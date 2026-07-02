@@ -327,11 +327,11 @@ export function ChargerModbusRows(props: ChargerModbusRowsProps) {
     let table_id = table[0];
 
     let set_ctrl_value = (value: Partial<ChargerModbusCtrlConfig[1]>) => {
-        props.on_ctrl(util.get_updated_union(props.ctrl, value));
+        props.on_ctrl(util.get_updated_union(props.ctrl, value) as ChargerModbusCtrlConfig);
     };
 
     let set_table_value = (value: any) => {
-        set_ctrl_value({table: util.get_updated_union(table as any, value)});
+        set_ctrl_value({table: util.get_updated_union(table as any, value) as ChargerModbusTableConfig});
     };
 
     return <>
