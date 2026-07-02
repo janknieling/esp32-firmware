@@ -1,0 +1,5 @@
+# Class of a managed charger, i.e. which backend controls it.
+# WARP must stay 0 so that charger configs saved before this enum existed
+# load as WARP chargers.
+WARP
+Modbus TCP

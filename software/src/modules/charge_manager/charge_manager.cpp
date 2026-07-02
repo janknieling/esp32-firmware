@@ -89,75 +89,11 @@ void ChargeManager::pre_setup()
     this->trace_buffer_index = logger.alloc_trace_buffer("charge_manager", 2 << 20);
 #endif
 
-    config_chargers_prototype = Config::Object({
-        {"host", Config::Str("", 0, 64)},
-        {"name", Config::Str("", 0, CHARGER_NAME_LENGTH)},
-        {"rot", Config::Enum(CMPhaseRotation::Unknown)},
-        {"uid", Config::Uint32(0)},
-    });
+    this->register_charger_generator(ChargerClassID::WARP, new CMChargerBackendGenerator());
 
-    config = ConfigRoot{Config::Object({
-        {"enable_charge_manager", Config::Bool(false)},
-        {"enable_central_management", Config::Bool(false)},
-        {"enable_watchdog", Config::Bool(false)},
-        {"default_available_current", Config::Uint32(0)},
-        {"maximum_available_current", Config::Uint(0, 0, 32000 * MAX_CONTROLLED_CHARGERS)},
-        {"minimum_current_auto", Config::Bool(true)},
-        {"minimum_current", Config::Uint(6000, 6000, 32000)},
-        {"minimum_current_1p", Config::Uint(6000, 6000, 32000)},
-        {"minimum_current_vehicle_type", Config::Uint32(0)},
-        {"verbose", Config::Bool(false)},
-        // Line currents are used to calculate the "requested current"
-        // if a charger is in state C for at least
-        // "requested_current_threshold" s.
-        // Otherwise the "requested current" is the "supported current"
-        // to allow the car to ramp up fast.
-        {"requested_current_threshold", Config::Uint16(60)},
-        // Added to requested current before distributing current.
-        // This margin has to be large enough to make sure
-        // every vehicle can always request more current.
-        // See https://github.com/Tinkerforge/warp-charger/blob/master/tools/current_ramp/allowed_vs_effective_3.gp
-        {"requested_current_margin", Config::Uint16(REQUESTED_CURRENT_MARGIN_DEFAULT)},
-        {"chargers", Config::Array({},
-            &config_chargers_prototype,
-            0, MAX_CONTROLLED_CHARGERS, Config::type_id<Config::ConfObject>()
-        )}
-    }), [](Config &conf, ConfigSource source) -> String {
-        if (conf.get("enable_charge_manager")->asBool() && conf.get("chargers")->count() == 0)
-            return "at least one charger is required";
-
-        uint32_t default_available_current = conf.get("default_available_current")->asUint();
-        uint32_t maximum_available_current = conf.get("maximum_available_current")->asUint();
-
-        if (default_available_current > maximum_available_current)
-            return "default_available_current can not be greater than maximum_available_current";
-
-        if (conf.get("minimum_current_auto")->asBool()) {
-            auto minimum_current_vehicle_type = conf.get("minimum_current_vehicle_type")->asUint();
-            uint32_t min_1p;
-            uint32_t min_3p;
-
-            if (minimum_current_vehicle_type > 0) {
-                min_1p = 6000;
-                min_3p = 9200;
-            } else {
-                min_1p = 6000;
-                min_3p = 6000;
-            }
-
-            conf.get("minimum_current_1p")->updateUint(min_1p);
-            conf.get("minimum_current")->updateUint(min_3p);
-        }
-
-        auto chargers = conf.get("chargers");
-
-        for (size_t i = 0; i < chargers->count(); i++)
-            for (size_t a = i + 1; a < chargers->count(); a++)
-                if (chargers->get(i)->get("host")->asString() == chargers->get(a)->get("host")->asString())
-                    return "there must not be two chargers with the same hostname or IP address";
-
-        return "";
-    }};
+    // The chargers config and its "ctrl" union are built in build_config()
+    // at the start of setup(), after all backend generators have registered
+    // themselves in their pre_setup().
 
     low_level_config = Config::Object({
         // 3 * 60 + 30 seconds to make sure we don't switch anything
@@ -429,17 +365,21 @@ bool ChargeManager::send_client_packet(uint8_t i) {
 
 void ChargeManager::start_manager_task()
 {
-    // All chargers are currently controlled via the CM protocol, so the CM
-    // client ids map 1:1 to the charger indices.
-    auto *cm_charger_idx = (uint8_t *)calloc_psram_or_dram(charger_count, sizeof(uint8_t));
     this->backends = (IChargerBackend **)calloc_psram_or_dram(charger_count, sizeof(IChargerBackend *));
 
     for (size_t i = 0; i < charger_count; ++i) {
-        cm_charger_idx[i] = (uint8_t)i;
-        this->backends[i] = new CMChargerBackend((uint8_t)i, (uint8_t)i);
+        auto charger_cfg = config.get("chargers")->get(i);
+        auto charger_class = charger_cfg->get("ctrl")->getTag<ChargerClassID>();
+        auto *generator = this->get_charger_generator(charger_class);
+
+        // The config validator rejects charger classes without a registered
+        // generator, so generator can't be nullptr here.
+        this->backends[i] = generator->new_charger((uint8_t)i, this->hosts[i], (const Config *)charger_cfg->get("ctrl")->get());
     }
 
-    CMChargerBackend::register_all(this->hosts.get(), cm_charger_idx, charger_count);
+    for (const auto &generator_tuple : this->generators) {
+        generator_tuple.second->setup_chargers_done();
+    }
 
     millis_t cm_send_delay = 1_s / millis_t{charger_count};
 
@@ -561,8 +501,124 @@ ConfigChargeMode ChargeManager::cm_to_config_cm(uint8_t mode) {
     return ConfigChargeMode::Fast;
 }
 
+void ChargeManager::register_charger_generator(ChargerClassID charger_class, IChargerBackendGenerator *generator)
+{
+    for (const auto &generator_tuple : this->generators) {
+        if (generator_tuple.first == charger_class) {
+            logger.printfln("Tried to register charger generator for already registered charger class %u.", (uint8_t)charger_class);
+            return;
+        }
+    }
+
+    this->generators.push_back({charger_class, generator});
+}
+
+IChargerBackendGenerator *ChargeManager::get_charger_generator(ChargerClassID charger_class)
+{
+    for (const auto &generator_tuple : this->generators) {
+        if (generator_tuple.first == charger_class) {
+            return generator_tuple.second;
+        }
+    }
+
+    return nullptr;
+}
+
+void ChargeManager::build_config()
+{
+    // The "ctrl" union prototypes come from the registered backend
+    // generators, so this must run after all pre_setup()s.
+    uint8_t class_count = (uint8_t)this->generators.size();
+    ConfUnionPrototype<ChargerClassID> *ctrl_prototypes = perm_new_array<ConfUnionPrototype<ChargerClassID>>(class_count, DRAM);
+
+    for (uint8_t i = 0; i < class_count; i++) {
+        ctrl_prototypes[i] = {this->generators[i].first, *this->generators[i].second->get_ctrl_config_prototype()};
+    }
+
+    config_chargers_prototype = Config::Object({
+        {"host", Config::Str("", 0, 64)},
+        {"name", Config::Str("", 0, CHARGER_NAME_LENGTH)},
+        {"rot", Config::Enum(CMPhaseRotation::Unknown)},
+        {"uid", Config::Uint32(0)},
+        {"ctrl", Config::Union(*Config::Null(),
+            ChargerClassID::WARP,
+            ctrl_prototypes,
+            class_count)},
+    });
+
+    config = ConfigRoot{Config::Object({
+        {"enable_charge_manager", Config::Bool(false)},
+        {"enable_central_management", Config::Bool(false)},
+        {"enable_watchdog", Config::Bool(false)},
+        {"default_available_current", Config::Uint32(0)},
+        {"maximum_available_current", Config::Uint(0, 0, 32000 * MAX_CONTROLLED_CHARGERS)},
+        {"minimum_current_auto", Config::Bool(true)},
+        {"minimum_current", Config::Uint(6000, 6000, 32000)},
+        {"minimum_current_1p", Config::Uint(6000, 6000, 32000)},
+        {"minimum_current_vehicle_type", Config::Uint32(0)},
+        {"verbose", Config::Bool(false)},
+        // Line currents are used to calculate the "requested current"
+        // if a charger is in state C for at least
+        // "requested_current_threshold" s.
+        // Otherwise the "requested current" is the "supported current"
+        // to allow the car to ramp up fast.
+        {"requested_current_threshold", Config::Uint16(60)},
+        // Added to requested current before distributing current.
+        // This margin has to be large enough to make sure
+        // every vehicle can always request more current.
+        // See https://github.com/Tinkerforge/warp-charger/blob/master/tools/current_ramp/allowed_vs_effective_3.gp
+        {"requested_current_margin", Config::Uint16(REQUESTED_CURRENT_MARGIN_DEFAULT)},
+        {"chargers", Config::Array({},
+            &config_chargers_prototype,
+            0, MAX_CONTROLLED_CHARGERS, Config::type_id<Config::ConfObject>()
+        )}
+    }), [this](Config &conf, ConfigSource source) -> String {
+        if (conf.get("enable_charge_manager")->asBool() && conf.get("chargers")->count() == 0)
+            return "at least one charger is required";
+
+        uint32_t default_available_current = conf.get("default_available_current")->asUint();
+        uint32_t maximum_available_current = conf.get("maximum_available_current")->asUint();
+
+        if (default_available_current > maximum_available_current)
+            return "default_available_current can not be greater than maximum_available_current";
+
+        if (conf.get("minimum_current_auto")->asBool()) {
+            auto minimum_current_vehicle_type = conf.get("minimum_current_vehicle_type")->asUint();
+            uint32_t min_1p;
+            uint32_t min_3p;
+
+            if (minimum_current_vehicle_type > 0) {
+                min_1p = 6000;
+                min_3p = 9200;
+            } else {
+                min_1p = 6000;
+                min_3p = 6000;
+            }
+
+            conf.get("minimum_current_1p")->updateUint(min_1p);
+            conf.get("minimum_current")->updateUint(min_3p);
+        }
+
+        auto chargers = conf.get("chargers");
+
+        for (size_t i = 0; i < chargers->count(); i++) {
+            for (size_t a = i + 1; a < chargers->count(); a++)
+                if (chargers->get(i)->get("host")->asString() == chargers->get(a)->get("host")->asString())
+                    return "there must not be two chargers with the same hostname or IP address";
+
+            auto charger_class = chargers->get(i)->get("ctrl")->getTag<ChargerClassID>();
+            if (this->get_charger_generator(charger_class) == nullptr)
+                return "charger class is not supported on this device";
+        }
+
+        return "";
+    }};
+}
+
 void ChargeManager::setup()
 {
+    this->build_config();
+
     api.restorePersistentConfig("charge_manager/config", &config);
 
     // We could move this below the enable_charge_manager check, but want to always see

@@ -280,13 +280,30 @@ static ChargerRemoteState cm_state_to_remote_state(cm_state_v1 *v1, cm_state_v2 
     return rs;
 }
 
-void CMChargerBackend::register_all(const char *const *cm_hosts,
-                                    const uint8_t *charger_idx_by_client_id_,
-                                    size_t cm_client_count)
+const Config *CMChargerBackendGenerator::get_ctrl_config_prototype()
 {
-    charger_idx_by_client_id = charger_idx_by_client_id_;
+    return Config::Null();
+}
 
-    cm_networking.register_manager(cm_hosts, cm_client_count, [](uint8_t client_id, cm_state_v1 *v1, cm_state_v2 *v2, cm_state_v3 *v3, cm_state_v4 *v4, cm_state_v5 *v5) {
+IChargerBackend *CMChargerBackendGenerator::new_charger(uint8_t idx, const char *host, const Config * /*ctrl_config*/)
+{
+    uint8_t cm_client_id = (uint8_t)this->cm_hosts.size();
+
+    this->cm_hosts.push_back(host);
+    this->charger_indices.push_back(idx);
+
+    return new CMChargerBackend(idx, cm_client_id);
+}
+
+void CMChargerBackendGenerator::setup_chargers_done()
+{
+    if (this->cm_hosts.size() == 0)
+        return;
+
+    // The vectors are not modified anymore, so their data pointers stay valid.
+    charger_idx_by_client_id = this->charger_indices.data();
+
+    cm_networking.register_manager(this->cm_hosts.data(), this->cm_hosts.size(), [](uint8_t client_id, cm_state_v1 *v1, cm_state_v2 *v2, cm_state_v3 *v3, cm_state_v4 *v4, cm_state_v5 *v5) {
         uint8_t idx = charger_idx_by_client_id[client_id];
 
         ChargerRemoteState rs = cm_state_to_remote_state(v1, v2, v3);

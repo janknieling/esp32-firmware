@@ -28,9 +28,12 @@
 #endif
 
 #include <functional>
+#include <vector>
+#include <utility>
 
 #include "current_limits.h"
 #include "generated/cas_error.enum.h"
+#include "generated/charger_class_id.enum.h"
 #include "modules/cm_networking/generated/config_charge_mode.enum.h"
 
 // File to store charger names for charge tracking, similar to USERNAME_FILE in the users module.
@@ -47,6 +50,7 @@ struct ChargerAllocationState;
 struct ChargerDecision;
 struct ChargerRemoteState;
 class IChargerBackend;
+class IChargerBackendGenerator;
 
 namespace ChargeMode {
     enum Type {
@@ -119,6 +123,11 @@ public:
 
     // Interface for charger backends (see charger_backend.h):
 
+    // Register a backend generator for a charger class. Must be called in
+    // pre_setup(), because ChargeManager::setup() builds the charger config
+    // prototype from the registered generators.
+    void register_charger_generator(ChargerClassID charger_class, IChargerBackendGenerator *generator);
+
     // Ingest a state update received from a charger. backend_pre_update (may
     // be nullptr) runs after the staleness check and UID update, but before
     // the received state is applied to the ChargerState, so that backends can
@@ -152,6 +161,9 @@ private:
 
     bool is_stale_state(uint8_t idx, uint32_t uptime);
     void update_charger_uid(uint8_t idx, uint32_t uid);
+
+    IChargerBackendGenerator *get_charger_generator(ChargerClassID charger_class);
+    void build_config();
 
     void update_charger_state_config(uint8_t idx);
     void update_charger_state_from_mode(ChargerState *state, int charger_idx);
@@ -251,6 +263,7 @@ private:
 
     ChargerAllocationState *charger_allocation_state = nullptr;
     IChargerBackend **backends = nullptr;
+    std::vector<std::pair<ChargerClassID, IChargerBackendGenerator *>> generators;
     CurrentAllocatorConfig *ca_config = nullptr;
     CurrentAllocatorState *ca_state = nullptr;
 

@@ -1112,7 +1112,7 @@ def main():
         if branch_name == "master":
             dirty_suffix = '_' + git_commit_id
         else:
-            dirty_suffix = '_' + git_commit_id + "_" + branch_name.replace("_", "-")
+            dirty_suffix = '_' + git_commit_id + "_" + branch_name.replace("_", "-").replace("/", "-")
 
     try:
         changelog_id = env.GetProjectOption("custom_changelog_id_override", product_id)

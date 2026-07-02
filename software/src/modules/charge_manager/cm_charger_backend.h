@@ -21,6 +21,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <vector>
 
 #include "charger_backend.h"
 
@@ -34,15 +35,22 @@ public:
     bool send_update(const ChargerCommand &cmd) override;
     void notify_unresponsive() override;
 
-    // Registers the CM/UDP protocol handler for all CM-controlled chargers.
-    // cm_hosts is indexed by CM client id; charger_idx_by_client_id maps a CM
-    // client id to the index in the charge manager's charger arrays. Both
-    // arrays must stay valid forever. Call at most once.
-    static void register_all(const char *const *cm_hosts,
-                             const uint8_t *charger_idx_by_client_id,
-                             size_t cm_client_count);
-
 private:
     uint8_t charger_idx;
     uint8_t cm_client_id;
+};
+
+class CMChargerBackendGenerator final : public IChargerBackendGenerator {
+public:
+    const Config *get_ctrl_config_prototype() override;
+    IChargerBackend *new_charger(uint8_t idx, const char *host, const Config *ctrl_config) override;
+
+    // Registers the CM/UDP protocol handler for all created backends. The
+    // hosts and index mapping collected by new_charger() must stay valid
+    // forever, so this generator must never be destroyed.
+    void setup_chargers_done() override;
+
+private:
+    std::vector<const char *> cm_hosts;
+    std::vector<uint8_t> charger_indices;
 };

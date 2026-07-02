@@ -23,6 +23,8 @@
 
 #include "modules/cm_networking/generated/cm_auth_type.enum.h"
 
+class Config;
+
 // Transport-neutral copy of the last authentication attempts seen on a charger.
 // Layout-compatible with cm_auth_info (checked via static_asserts in
 // cm_charger_backend.cpp) so that the CM backend can memcpy state packets.
@@ -145,4 +147,23 @@ public:
     // RE_RESOLVE_TIMEOUT or if it never sent a state at all. Backends should
     // re-resolve the hostname, force a reconnect or similar.
     virtual void notify_unresponsive() = 0;
+};
+
+// Factory for charger backends of one charger class. Register with
+// charge_manager.register_charger_generator() in pre_setup().
+class IChargerBackendGenerator {
+public:
+    virtual ~IChargerBackendGenerator() = default;
+
+    // Config prototype for the "ctrl" union member of this charger class.
+    // Return Config::Null() if this class needs no extra configuration.
+    virtual const Config *get_ctrl_config_prototype() = 0;
+
+    // Create a backend for the charger at index idx of the charge manager's
+    // charger arrays. host points to a persistent string; ctrl_config is the
+    // active "ctrl" union member of this charger's config entry.
+    virtual IChargerBackend *new_charger(uint8_t idx, const char *host, const Config *ctrl_config) = 0;
+
+    // Called once after all charger backends have been created.
+    virtual void setup_chargers_done() {}
 };
