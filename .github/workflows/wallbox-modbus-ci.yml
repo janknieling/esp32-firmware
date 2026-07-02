@@ -38,12 +38,20 @@ jobs:
         if: failure()
         working-directory: ./software
         run: |
-          echo "=== chargers_modbus_tcp occurrences ==="
-          grep -n "chargers_modbus_tcp" web/src/ts/translation.tsx | head -40 || true
-          echo "=== register_row / register_add_message lines ==="
-          grep -n "register_row\|register_add_message\|role_1:" web/src/ts/translation.tsx || true
-          echo "=== lines 9060-9110 (warp3 first error region) ==="
-          sed -n '9060,9110p' web/src/ts/translation.tsx || true
+          python3 - <<'PY'
+          import re, subprocess
+          # Re-run tsc to capture the first syntax error line, then print that
+          # region with repr() so hidden Unicode characters become visible.
+          r = subprocess.run(['npx','tsc','--build','tsconfig.json'],
+                             capture_output=True, text=True, cwd='web/src')
+          out = r.stdout + r.stderr
+          lines = open('web/src/ts/translation.tsx', encoding='utf-8').read().split('\n')
+          errs = sorted(set(int(m.group(1)) for m in re.finditer(r'translation\.tsx\((\d+),', out)))
+          first = errs[0] if errs else 9061
+          print("first tsc error line:", first, "total error lines:", len(errs))
+          for i in range(max(0, first-14), min(len(lines), first+3)):
+              print(i+1, repr(lines[i]))
+          PY
       - uses: actions/cache/save@v5
         if: always()
         with:
