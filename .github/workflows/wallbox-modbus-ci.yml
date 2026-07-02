@@ -34,6 +34,16 @@ jobs:
       - name: 'Build Firmware: ${{ matrix.env }}'
         working-directory: ./software
         run: uv run pio run -e ${{ matrix.env }}
+      - name: Dump generated translation.tsx on failure
+        if: failure()
+        working-directory: ./software
+        run: |
+          echo "=== chargers_modbus_tcp occurrences ==="
+          grep -n "chargers_modbus_tcp" web/src/ts/translation.tsx | head -40 || true
+          echo "=== register_row / register_add_message lines ==="
+          grep -n "register_row\|register_add_message\|role_1:" web/src/ts/translation.tsx || true
+          echo "=== lines 9060-9110 (warp3 first error region) ==="
+          sed -n '9060,9110p' web/src/ts/translation.tsx || true
       - uses: actions/cache/save@v5
         if: always()
         with:
