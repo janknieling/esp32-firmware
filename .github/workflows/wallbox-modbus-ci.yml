@@ -1,0 +1,45 @@
+name: Wallbox Modbus/TCP branch CI
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/wallbox-modbus-tcp-748okn
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [warp3, energy_manager_v2]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.platformio
+            ./software/.pio
+            ./software/packages
+          key: wallbox-modbus-${{ matrix.env }}-${{ github.run_id }}
+          restore-keys: |
+            wallbox-modbus-${{ matrix.env }}-
+            ubuntu-latest-
+      - name: Install UV
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Sync UV
+        working-directory: ./software
+        run: uv sync
+      - name: 'Build Firmware: ${{ matrix.env }}'
+        working-directory: ./software
+        run: uv run pio run -e ${{ matrix.env }}
+      - uses: actions/cache/save@v5
+        if: always()
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.platformio
+            ./software/.pio
+            ./software/packages
+          key: wallbox-modbus-${{ matrix.env }}-${{ github.run_id }}
