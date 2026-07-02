@@ -43,7 +43,7 @@
 static constexpr micros_t PHASE_SWITCH_GRACE = 30_s;
 
 // Re-read static roles (serial number, max supported current, ...) this often.
-static constexpr micros_t STATIC_READ_INTERVAL = 60_min;
+static constexpr micros_t STATIC_READ_INTERVAL = 1_h;
 
 // If the allocator reports this charger as unresponsive and the last
 // successfully read value is older than this, force a reconnect.
@@ -228,7 +228,7 @@ void ChargerModbusTCP::setup_table(ChargerModbusTCPTableID table_id, const Confi
             role_to_spec[role_idx] = static_cast<uint8_t>(i);
     }
 
-    task_scheduler.scheduleWithFixedDelay([this]() {
+    (void)task_scheduler.scheduleWithFixedDelay([this]() {
         this->poll_tick();
         this->write_tick();
     }, 2_s, table->min_read_interval);
@@ -747,14 +747,14 @@ void ChargerModbusTCP::write_tick()
     if (!connected || write_in_flight || table == nullptr)
         return;
 
-    if (last_write != 0_us && !deadline_elapsed(last_write + table->min_write_interval.to<micros_t>()))
+    if (last_write != 0_us && !deadline_elapsed(last_write + table->min_write_interval))
         return;
 
     // Keep-alive: refresh Set Charging Current periodically so that the
     // charger-side failsafe never fires while this manager is alive.
     if (table->keep_alive_interval != 0_ms
      && ever_written[static_cast<uint8_t>(Role::SetChargingCurrent)]
-     && deadline_elapsed(last_current_write + table->keep_alive_interval.to<micros_t>())) {
+     && deadline_elapsed(last_current_write + table->keep_alive_interval)) {
         enqueue_write(Role::SetChargingCurrent, last_written[static_cast<uint8_t>(Role::SetChargingCurrent)], false);
     }
 
