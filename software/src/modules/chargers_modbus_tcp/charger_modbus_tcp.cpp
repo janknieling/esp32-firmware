@@ -29,8 +29,8 @@
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
 
-#include "modules/charge_manager/charge_manager.h"
-#include "modules/charge_manager/charge_manager_private.h"
+// The ChargeManager class and the charge_manager global come in via
+// module_dependencies.h (Charge Manager is a required dependency).
 #include "tools.h"
 
 #define MODBUS_VALUE_TYPE_TO_REGISTER_COUNT(x) (static_cast<uint8_t>(x) & 0x07)

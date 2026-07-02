@@ -27,9 +27,10 @@
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
 
+// The ChargeManager class and the charge_manager global come in via
+// module_dependencies.h (Charge Manager references itself as a dependency).
 #include "TFTools/Micros.h"
 #include "bindings/base58.h"
-#include "charge_manager.h"
 #include "charge_manager_private.h"
 #include "modules/cm_networking/cm_networking_defs.h"
 #include "modules/cm_networking/generated/cm_auth_feedback.enum.h"

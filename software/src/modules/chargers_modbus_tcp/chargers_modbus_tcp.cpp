@@ -24,8 +24,10 @@
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
 
+// The ChargeManager class and the charge_manager global come in via
+// module_dependencies.h (Charge Manager is a required dependency).
 #include "charger_modbus_tcp.h"
-#include "modules/charge_manager/charge_manager.h"
+#include "modules/charge_manager/generated/charger_class_id.enum.h"
 #include "modules/modbus_tcp_client/generated/modbus_register_type.enum.h"
 #include "modules/modbus_tcp_client/generated/modbus_value_type.enum.h"
 #include "generated/charger_modbus_tcp_register_role.enum.h"
