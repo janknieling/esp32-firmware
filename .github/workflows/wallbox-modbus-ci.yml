@@ -45,12 +45,14 @@ jobs:
           r = subprocess.run(['npx','tsc','--build','tsconfig.json'],
                              capture_output=True, text=True, cwd='web/src')
           out = r.stdout + r.stderr
+          import base64
           lines = open('web/src/ts/translation.tsx', encoding='utf-8').read().split('\n')
           errs = sorted(set(int(m.group(1)) for m in re.finditer(r'translation\.tsx\((\d+),', out)))
           first = errs[0] if errs else 9061
           print("first tsc error line:", first, "total error lines:", len(errs))
-          for i in range(max(0, first-14), min(len(lines), first+3)):
-              print(i+1, repr(lines[i]))
+          for i in range(max(0, first-3), min(len(lines), first+2)):
+              nonascii = [(j, hex(ord(c))) for j, c in enumerate(lines[i]) if ord(c) > 126]
+              print(i+1, "nonascii=", nonascii, "b64=", base64.b64encode(lines[i].encode()).decode())
           PY
       - uses: actions/cache/save@v5
         if: always()
