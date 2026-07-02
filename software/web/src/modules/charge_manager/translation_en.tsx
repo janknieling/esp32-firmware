@@ -67,6 +67,9 @@ let x = {
 
             "table_charger_name": "Display name",
             "table_charger_host": "Host",
+            "table_charger_type": "Type",
+            "charger_type": "Type",
+            "charger_type_warp": "WARP charger",
             "table_charger_rotation": "Phase rotation",
 
             "add_charger_title": "Add charger",

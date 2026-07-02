@@ -36,9 +36,16 @@ import { SubPage } from "../../ts/components/sub_page";
 import { Table } from "../../ts/components/table";
 import type { ChargeManagerStatus } from "./main";
 import { CMPhaseRotation } from "./generated/cm_phase_rotation.enum";
+import { ChargerClassID } from "./generated/charger_class_id.enum";
 import { InputFloat } from "../../ts/components/input_float";
 import { Switch } from "ts/components/switch";
 import { DiscoveryResultGroup, DiscoveryResultItem } from "../../ts/components/discovery_result";
+//#if MODULE_CHARGERS_MODBUS_TCP_AVAILABLE
+import { ChargerModbusRows, new_modbus_ctrl_config, is_modbus_ctrl, get_modbus_charger_type_name, get_modbus_table_id } from "../chargers_modbus_tcp/charger_config";
+import { ChargerModbusTCPTableID } from "../chargers_modbus_tcp/generated/charger_modbus_tcp_table_id.enum";
+//#endif
+
+const WARP_CTRL: API.getType["charge_manager/config"]["chargers"][0]["ctrl"] = [ChargerClassID.WARP, null];
 
 type ChargeManagerConfig = API.getType["charge_manager/config"];
 type ChargerConfig = ChargeManagerConfig["chargers"][0];
@@ -73,8 +80,8 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
         super('charge_manager/config',
               () => __("charge_manager.script.save_failed"),
               () => __("charge_manager.script.reboot_content_changed"), {
-                  addCharger: {host: "", name: "", rot: -1, uid: 0},
-                  editCharger: {host: "", name: "", rot: -1, uid: 0},
+                  addCharger: {host: "", name: "", rot: -1, uid: 0, ctrl: WARP_CTRL},
+                  editCharger: {host: "", name: "", rot: -1, uid: 0, ctrl: WARP_CTRL},
                   managementEnabled: false,
                   scanResult: [],
                   chargersInvalid: false,
@@ -249,7 +256,8 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
             host: "127.0.0.1",
             name: name.display_name,
             rot: CMPhaseRotation.Unknown,
-            uid: 0
+            uid: 0,
+            ctrl: WARP_CTRL
         });
         this.setState({chargers: c})
     }
@@ -330,6 +338,64 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
             return ret;
         }
 
+        const charger_type_name = (charger: ChargerConfig): string => {
+//#if MODULE_CHARGERS_MODBUS_TCP_AVAILABLE
+            if (is_modbus_ctrl(charger.ctrl))
+                return get_modbus_charger_type_name(charger.ctrl);
+//#endif
+            return __("charge_manager.content.charger_type_warp");
+        };
+
+        const charger_is_modbus = (charger: ChargerConfig): boolean => {
+//#if MODULE_CHARGERS_MODBUS_TCP_AVAILABLE
+            return is_modbus_ctrl(charger.ctrl);
+//#else
+            return false;
+//#endif
+        };
+
+        // Charger type selector and the type-specific configuration rows.
+        // Only rendered if at least one non-WARP charger backend is compiled in.
+        const charger_type_select_row = (charger: ChargerConfig, set: (c: Partial<ChargerConfig>) => void): ComponentChild[] => {
+            let rows: ComponentChild[] = [];
+//#if MODULE_CHARGERS_MODBUS_TCP_AVAILABLE
+            let type_value = is_modbus_ctrl(charger.ctrl)
+                           ? (get_modbus_table_id(charger.ctrl) == ChargerModbusTCPTableID.Custom ? "modbus_custom" : "keba_p30")
+                           : "warp";
+
+            rows.push(
+                <FormRow label={__("charge_manager.content.charger_type")}>
+                    <InputSelect
+                        required
+                        items={[
+                            ["warp", __("charge_manager.content.charger_type_warp")],
+                            ["keba_p30", __("chargers_modbus_tcp.content.table_keba_p30")],
+                            ["modbus_custom", __("chargers_modbus_tcp.content.table_custom")],
+                        ]}
+                        value={type_value}
+                        onValue={(v) => {
+                            if (v == "warp")
+                                set({ctrl: WARP_CTRL});
+                            else if (v == "keba_p30")
+                                set({ctrl: new_modbus_ctrl_config(ChargerModbusTCPTableID.KebaP30)});
+                            else
+                                set({ctrl: new_modbus_ctrl_config(ChargerModbusTCPTableID.Custom)});
+                        }} />
+                </FormRow>);
+//#endif
+            return rows;
+        };
+
+        const charger_type_detail_rows = (charger: ChargerConfig, set: (c: Partial<ChargerConfig>) => void): ComponentChild[] => {
+            let rows: ComponentChild[] = [];
+//#if MODULE_CHARGERS_MODBUS_TCP_AVAILABLE
+            if (is_modbus_ctrl(charger.ctrl)) {
+                rows.push(<ChargerModbusRows ctrl={charger.ctrl} on_ctrl={(ctrl) => set({ctrl: ctrl})} />);
+            }
+//#endif
+            return rows;
+        };
+
         const charge_manager_mode_suffix = API.hasModule("em_phase_switcher") ? "_em_with_ps" : "";
         const charge_manager_mode_explainer_suffix = API.hasModule("em_common") ? API.hasModule("em_phase_switcher") ? "_em_with_ps" : "_em" : "";
 
@@ -377,12 +443,13 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                     <Table nestingDepth={1} // We are not nested, but this also reduces the modal's size to lg
                         invalid={this.state.chargersInvalid}
                         invalidFeedback={__("charge_manager.content.add_charger_invalid_feedback")}
-                        columnNames={[__("charge_manager.content.table_charger_name"), __("charge_manager.content.table_charger_host"), __("charge_manager.content.table_charger_rotation")]}
+                        columnNames={[__("charge_manager.content.table_charger_name"), __("charge_manager.content.table_charger_host"), __("charge_manager.content.table_charger_type"), __("charge_manager.content.table_charger_rotation")]}
                         rows={state.chargers.map((charger, i) =>
                             { return {
                                 columnValues: [
                                     charger.name,
                                     util.remoteAccessMode ? charger.host : <a target="_blank" rel="noopener noreferrer" href={(charger.host == '127.0.0.1' || charger.host == 'localhost') ? '/' : "http://" + charger.host}>{charger.host}</a>,
+                                    charger_type_name(charger),
                                     translate_unchecked(`charge_manager.content.rotation_${charger.rot}`)
                                 ],
                                 editTitle: __("charge_manager.content.edit_charger_title"),
@@ -395,6 +462,7 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                             required
                                         />
                                     </FormRow>
+                                    {charger_type_select_row(state.editCharger, (c) => this.setState({editCharger: {...state.editCharger, ...c}}))}
                                     <FormRow label={__("charge_manager.content.edit_charger_host")}>
                                         <InputHost
                                             value={state.editCharger.host}
@@ -405,6 +473,7 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                             class={check_host(state.editCharger.host, i) != undefined ? "is-invalid" : ""}
                                             invalidFeedback={check_host(state.editCharger.host, i)}/>
                                     </FormRow>
+                                    {charger_type_detail_rows(state.editCharger, (c) => this.setState({editCharger: {...state.editCharger, ...c}}))}
                                     <FormRow label={__("charge_manager.content.edit_charger_rotation")} help={__("charge_manager.content.charger_rotation_help")}>
                                         <InputSelect items={[
                                                 [CMPhaseRotation.Unknown.toString(), __("charge_manager.content.rotation_0")],
@@ -441,7 +510,7 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                         addTitle={__("charge_manager.content.add_charger_title")}
                         addMessage={__("charge_manager.content.add_charger_message")(state.chargers.length, MAX_CONTROLLED_CHARGERS)}
                         onAddShow={async () => {
-                            this.setState({addCharger: {name: "", host: "", rot: -1, uid: 0}});
+                            this.setState({addCharger: {name: "", host: "", rot: -1, uid: 0, ctrl: WARP_CTRL}});
                             this.scan_services();
                             this.scan_interval_id = window.setInterval(this.scan_services, 3000);
                         }}
@@ -453,6 +522,7 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                     required
                                 />
                             </FormRow>
+                            {charger_type_select_row(state.addCharger, (c) => this.setState({addCharger: {...state.addCharger, ...c}}))}
                             <FormRow label={__("charge_manager.content.add_charger_host")}>
                                 <InputHost
                                     value={state.addCharger.host}
@@ -462,6 +532,7 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                     class={check_host(state.addCharger.host, -1) != undefined ? "is-invalid" : ""}
                                     invalidFeedback={check_host(state.addCharger.host, -1)}/>
                             </FormRow>
+                            {!charger_is_modbus(state.addCharger) ?
                             <FormRow label={__("charge_manager.content.add_charger_found")}>
                                 <DiscoveryResultGroup>{
                                     state.scanResult
@@ -474,11 +545,13 @@ export class ChargeManagerChargers extends ConfigComponent<'charge_manager/confi
                                                         : state.chargers.some(c => c.host == s.hostname + ".local" || c.host == s.ip) ?
                                                             __("component.discovery_result.already_added")
                                                         : null}
-                                                onClick={() => this.setState({addCharger: {host: s.hostname + ".local", name: s.display_name, rot: -1, uid: 0}})}>
+                                                onClick={() => this.setState({addCharger: {host: s.hostname + ".local", name: s.display_name, rot: -1, uid: 0, ctrl: WARP_CTRL}})}>
                                                     {util.remoteAccessMode ? <div>{s.hostname + ".local"} / {s.ip}</div> : <div><a target="_blank" rel="noopener noreferrer" href={"http://" + s.hostname + ".local"}>{s.hostname + ".local"}</a> / <a target="_blank" rel="noopener noreferrer" href={"http://" + s.ip}>{s.ip}</a></div>}
                                               </DiscoveryResultItem>))
                                 }</DiscoveryResultGroup>
                             </FormRow>
+                            : undefined}
+                            {charger_type_detail_rows(state.addCharger, (c) => this.setState({addCharger: {...state.addCharger, ...c}}))}
                             <FormRow label={__("charge_manager.content.add_charger_rotation")} help={__("charge_manager.content.charger_rotation_help")}>
                                 <InputSelect items={[
                                         [CMPhaseRotation.Unknown.toString(), __("charge_manager.content.rotation_0")],

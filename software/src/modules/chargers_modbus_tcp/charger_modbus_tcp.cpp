@@ -73,7 +73,6 @@ static const ChargerModbusTCP::RegisterSpec keba_p30_specs[] = {
     {Role::MaxChargingCurrent,   ModbusRegisterType::HoldingRegister, 1100, ModbusValueType::U32BE, 0.0f, 1.0f},    // mA
     {Role::MaxSupportedCurrent,  ModbusRegisterType::HoldingRegister, 1110, ModbusValueType::U32BE, 0.0f, 1.0f},    // mA
     {Role::SessionEnergy,        ModbusRegisterType::HoldingRegister, 1502, ModbusValueType::U32BE, 0.0f, 0.1f},    // 0.1 Wh -> Wh
-    {Role::PhaseSwitchSource,    ModbusRegisterType::HoldingRegister, 1550, ModbusValueType::U32BE, 0.0f, 1.0f},
     {Role::PhaseSwitchingState,  ModbusRegisterType::HoldingRegister, 1552, ModbusValueType::U32BE, 0.0f, 1.0f},
 
     {Role::SetChargingCurrent,   ModbusRegisterType::HoldingRegister, 5004, ModbusValueType::U16,   0.0f, 1.0f},    // mA
@@ -81,14 +80,9 @@ static const ChargerModbusTCP::RegisterSpec keba_p30_specs[] = {
     {Role::SetEnabled,           ModbusRegisterType::HoldingRegister, 5014, ModbusValueType::U16,   0.0f, 1.0f},
     {Role::FailsafeCurrent,      ModbusRegisterType::HoldingRegister, 5016, ModbusValueType::U16,   0.0f, 1.0f},    // mA
     {Role::FailsafeTimeout,      ModbusRegisterType::HoldingRegister, 5018, ModbusValueType::U16,   0.0f, 1.0f},    // s
-    {Role::PhaseSwitchSource,    ModbusRegisterType::HoldingRegister, 5050, ModbusValueType::U16,   0.0f, 1.0f},    // writable variant, see below
+    {Role::PhaseSwitchSource,    ModbusRegisterType::HoldingRegister, 5050, ModbusValueType::U16,   0.0f, 1.0f},
     {Role::TriggerPhaseSwitch,   ModbusRegisterType::HoldingRegister, 5052, ModbusValueType::U16,   0.0f, 1.0f},
 };
-
-// Note on Phase Switch Source: register 1550 is the readback, 5050 the
-// writable variant. Because both share the same role, role_to_spec keeps the
-// FIRST spec for reads (1550) and enqueue_write() uses a separate write
-// lookup that skips read-only value types, see get_write_spec().
 
 static const ChargerModbusTCP::TableSpec keba_p30_table = {
     keba_p30_specs,

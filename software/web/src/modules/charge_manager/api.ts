@@ -1,4 +1,5 @@
 import { ConfigChargeMode } from "modules/cm_networking/generated/config_charge_mode.enum";
+import { ChargerClassID } from "./generated/charger_class_id.enum";
 import { ZeroPhaseDecision } from "./generated/zero_phase_decision.union";
 import { OnePhaseDecision } from "./generated/one_phase_decision.union";
 import { ThreePhaseDecision } from "./generated/three_phase_decision.union";
@@ -55,11 +56,17 @@ export type state = {
     alloc: number[]
 }
 
-interface ChargerConfig {
+// The payload type depends on the charger class: null for WARP (CM protocol)
+// chargers, see modules/chargers_modbus_tcp/charger_config.tsx for the
+// Modbus/TCP payload.
+export type ChargerCtrlConfig = [ChargerClassID, any];
+
+export interface ChargerConfig {
     host: string,
     name: string,
     rot: number,
     uid: number,
+    ctrl: ChargerCtrlConfig,
 }
 
 export interface config {

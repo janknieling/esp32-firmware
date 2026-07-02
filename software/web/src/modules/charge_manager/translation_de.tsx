@@ -67,6 +67,9 @@ let x = {
 
             "table_charger_name": "Anzeigename",
             "table_charger_host": "Host",
+            "table_charger_type": "Typ",
+            "charger_type": "Typ",
+            "charger_type_warp": "WARP-Wallbox",
             "table_charger_rotation": "Phasenrotation",
 
             "add_charger_title": "Wallbox hinzufügen",
